@@ -1,0 +1,15 @@
+from django.urls import path
+from .views import (
+    SetupAdminView, LoginView, ProtectedDataView, RefreshTokenView, 
+    AdminDetailsView, DashboardKPIView, DashboardChartsView
+)
+
+urlpatterns = [
+    path('setup-admin/', SetupAdminView.as_view(), name='setup_admin'),
+    path('login/', LoginView.as_view(), name='login'),
+    path('refresh/', RefreshTokenView.as_view(), name='refresh_token'),
+    path('protected-data/', ProtectedDataView.as_view(), name='protected_data'),
+    path('admin-details/', AdminDetailsView.as_view(), name='admin_details'),
+    path('dashboard-kpis/', DashboardKPIView.as_view(), name='dashboard_kpis'),
+    path('dashboard-charts/', DashboardChartsView.as_view(), name='dashboard_charts'),
+]
