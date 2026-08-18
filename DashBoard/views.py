@@ -215,6 +215,127 @@ class AdminDetailsView(APIView):
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+def parse_date(date_str):
+    if not date_str:
+        return None
+    s = str(date_str).strip()
+    for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%d-%m-%Y", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(s[:19], fmt[:len(s[:19])]).date()
+        except Exception:
+            pass
+    try:
+        return datetime.fromisoformat(s).date()
+    except Exception:
+        pass
+    return None
+
+def extract_dashboard_filters(request):
+    f_property_type = request.query_params.get("property_type") or request.query_params.get("pg_type") or request.headers.get("property_type")
+    f_living_type = request.query_params.get("living_type") or request.headers.get("living_type")
+    f_member_status = request.query_params.get("member_status") or request.query_params.get("status") or request.headers.get("member_status")
+    f_rent_status = request.query_params.get("rent_status") or request.headers.get("rent_status")
+    f_month = request.query_params.get("month") or request.headers.get("month")
+    f_year = request.query_params.get("year") or request.headers.get("year")
+    f_date_range = request.query_params.get("date_range") or request.headers.get("date_range")
+    f_start_date = request.query_params.get("start_date") or request.headers.get("start_date")
+    f_end_date = request.query_params.get("end_date") or request.headers.get("end_date")
+    f_quick_range = request.query_params.get("quick_range") or request.headers.get("quick_range")
+
+    start_d = None
+    end_d = None
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+
+    if f_quick_range:
+        qr = str(f_quick_range).lower().replace("-", "_").replace(" ", "_")
+        if qr in ["today"]:
+            start_d = end_d = today
+        elif qr in ["yesterday"]:
+            start_d = end_d = today - timedelta(days=1)
+        elif qr in ["this_week"]:
+            start_d = today - timedelta(days=today.weekday())
+            end_d = start_d + timedelta(days=6)
+        elif qr in ["last_week"]:
+            end_d = today - timedelta(days=today.weekday() + 1)
+            start_d = end_d - timedelta(days=6)
+        elif qr in ["this_month"]:
+            start_d = date(today.year, today.month, 1)
+            next_m = today.month % 12 + 1
+            next_y = today.year + (1 if today.month == 12 else 0)
+            end_d = date(next_y, next_m, 1) - timedelta(days=1)
+        elif qr in ["last_month"]:
+            last_m = today.month - 1 if today.month > 1 else 12
+            last_y = today.year - (1 if today.month == 1 else 0)
+            start_d = date(last_y, last_m, 1)
+            end_d = date(today.year, today.month, 1) - timedelta(days=1)
+        elif qr in ["this_year"]:
+            start_d = date(today.year, 1, 1)
+            end_d = date(today.year, 12, 31)
+        elif qr in ["7days", "last_7_days", "7_days"]:
+            start_d = today - timedelta(days=7)
+            end_d = today
+        elif qr in ["30days", "last_30_days", "30_days"]:
+            start_d = today - timedelta(days=30)
+            end_d = today
+        elif qr in ["90days", "last_90_days", "90_days"]:
+            start_d = today - timedelta(days=90)
+            end_d = today
+
+    if not start_d and not end_d and f_date_range:
+        parts = [p.strip() for p in f_date_range.replace("to", ",").split(",") if p.strip()]
+        if len(parts) >= 2:
+            start_d = parse_date(parts[0])
+            end_d = parse_date(parts[1])
+        elif len(parts) == 1:
+            start_d = parse_date(parts[0])
+
+    if f_start_date and not start_d:
+        start_d = parse_date(f_start_date)
+    if f_end_date and not end_d:
+        end_d = parse_date(f_end_date)
+
+    month_num = None
+    if f_month:
+        m_str = str(f_month).strip()
+        if m_str.isdigit():
+            month_num = int(m_str)
+        else:
+            for i in range(1, 13):
+                m_name = date(2000, i, 1).strftime("%B").lower()
+                m_abbr = date(2000, i, 1).strftime("%b").lower()
+                if m_str.lower() in (m_name, m_abbr):
+                    month_num = i
+                    break
+
+    year_num = int(f_year) if f_year and str(f_year).isdigit() else None
+
+    return {
+        "property_type": f_property_type,
+        "living_type": f_living_type,
+        "member_status": f_member_status,
+        "rent_status": f_rent_status,
+        "month": month_num,
+        "year": year_num,
+        "start_date": start_d,
+        "end_date": end_d
+    }
+
+def match_date_filter(dt_val, filters):
+    if not dt_val:
+        return True
+    parsed_dt = parse_date(dt_val)
+    if not parsed_dt:
+        return True
+    if filters["start_date"] and parsed_dt < filters["start_date"]:
+        return False
+    if filters["end_date"] and parsed_dt > filters["end_date"]:
+        return False
+    if filters["month"] and parsed_dt.month != filters["month"]:
+        return False
+    if filters["year"] and parsed_dt.year != filters["year"]:
+        return False
+    return True
+
 class DashboardKPIView(APIView):
     """
     GET API to calculate and return dashboard KPI metrics dynamically from Firebase.
@@ -228,8 +349,9 @@ class DashboardKPIView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+        filters = extract_dashboard_filters(request)
+
         try:
-            # Parallel fetch of PGs, Members, and Rent Records
             nodes = fetch_nodes_parallel({
                 "pgs": f"{DATABASE_URL}/pg_properties.json",
                 "members": f"{DATABASE_URL}/members.json",
@@ -247,8 +369,15 @@ class DashboardKPIView(APIView):
             occupied_beds = 0
 
             for pg_id, pg_info in pgs_data.items():
-                if not pg_info:
+                if not isinstance(pg_info, dict):
                     continue
+                pg_type = pg_info.get("pg_type", "")
+                living_type = pg_info.get("living_type", "")
+                if filters["property_type"] and pg_type.lower() != filters["property_type"].lower():
+                    continue
+                if filters["living_type"] and living_type.lower() != filters["living_type"].lower():
+                    continue
+
                 total_pgs += 1
                 status_val = pg_info.get("property_status")
                 if status_val is True or str(status_val).lower() in ["true", "active"]:
@@ -273,32 +402,62 @@ class DashboardKPIView(APIView):
             notice_members = 0
 
             for m_id, m_info in members_data.items():
-                if not m_info or m_info.get("is_deleted"):
+                if not isinstance(m_info, dict) or m_info.get("is_deleted"):
                     continue
-                total_members += 1
+
+                pg_id = m_info.get("pg_id", "")
+                pg_info = pgs_data.get(pg_id, {})
+                if filters["property_type"] and pg_info.get("pg_type", "").lower() != filters["property_type"].lower():
+                    continue
+                if filters["living_type"] and pg_info.get("living_type", "").lower() != filters["living_type"].lower():
+                    continue
+
                 m_status = m_info.get("status", "")
+                if filters["member_status"] and m_status.lower() != filters["member_status"].lower():
+                    continue
+
+                m_dt = m_info.get("created_at") or m_info.get("joining_date")
+                if not match_date_filter(m_dt, filters):
+                    continue
+
+                total_members += 1
                 if m_status == "Active":
                     active_members += 1
                 elif m_status == "Notice Period":
                     notice_members += 1
-
-            # 3. Fetch Rent Records
-            rent_res = requests.get(f"{DATABASE_URL}/rent_records.json")
-            rent_data = rent_res.json() if rent_res.status_code == 200 and rent_res.json() else {}
 
             rent_collected_amount = 0
             pending_rent_amount = 0
             pending_members_count = 0
 
             for r_id, r_info in rent_data.items():
-                if not r_info:
+                if not isinstance(r_info, dict):
                     continue
+
                 r_status = str(r_info.get("status", "")).lower()
-                monthly_rent = 0
+                if filters["rent_status"] and r_status != filters["rent_status"].lower():
+                    continue
+
+                m_id = r_info.get("member_id", r_id)
+                m_info = members_data.get(m_id, {})
+                if filters["member_status"] and m_info.get("status", "").lower() != filters["member_status"].lower():
+                    continue
+
+                pg_id = r_info.get("pg_id") or m_info.get("pg_id", "")
+                pg_info = pgs_data.get(pg_id, {})
+                if filters["property_type"] and pg_info.get("pg_type", "").lower() != filters["property_type"].lower():
+                    continue
+                if filters["living_type"] and pg_info.get("living_type", "").lower() != filters["living_type"].lower():
+                    continue
+
+                r_dt = r_info.get("updated_at") or r_info.get("created_at") or r_info.get("rent_due_date")
+                if not match_date_filter(r_dt, filters):
+                    continue
+
                 try:
                     monthly_rent = int(r_info.get("monthly_rent", 0))
                 except (ValueError, TypeError):
-                    pass
+                    monthly_rent = 0
 
                 if r_status == "paid":
                     rent_collected_amount += monthly_rent
@@ -306,7 +465,6 @@ class DashboardKPIView(APIView):
                     pending_rent_amount += monthly_rent
                     pending_members_count += 1
 
-            # Calculate occupancy percentage
             if total_beds > 0:
                 occupancy_perc = round((occupied_beds / total_beds) * 100)
             elif total_rooms > 0:
@@ -360,8 +518,9 @@ class DashboardChartsView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+        filters = extract_dashboard_filters(request)
+
         try:
-            # Parallel fetch of PGs and Members
             nodes = fetch_nodes_parallel({
                 "pgs": f"{DATABASE_URL}/pg_properties.json",
                 "members": f"{DATABASE_URL}/members.json"
@@ -374,8 +533,15 @@ class DashboardChartsView(APIView):
             pg_revenue_map = {}
 
             for pg_id, pg_info in pgs_data.items():
-                if not pg_info:
+                if not isinstance(pg_info, dict):
                     continue
+                pg_type = pg_info.get("pg_type", "")
+                living_type = pg_info.get("living_type", "")
+                if filters["property_type"] and pg_type.lower() != filters["property_type"].lower():
+                    continue
+                if filters["living_type"] and living_type.lower() != filters["living_type"].lower():
+                    continue
+
                 pg_name = pg_info.get("property_name", pg_info.get("pg_name", pg_info.get("name", pg_id)))
                 pg_revenue_map[pg_name] = 0
 
@@ -392,7 +558,6 @@ class DashboardChartsView(APIView):
 
             vacant_beds = max(0, total_beds - occupied_beds)
 
-            # Occupancy Overview
             occ_total = total_beds if total_beds > 0 else (occupied_beds + vacant_beds)
             if occ_total > 0:
                 occ_perc = round((occupied_beds / occ_total) * 100, 1)
@@ -405,10 +570,6 @@ class DashboardChartsView(APIView):
                 "vacant_beds": {"count": vacant_beds, "percentage": vac_perc}
             }
 
-            # 2. Fetch Members & Calculate Status Distribution + PG Revenue
-            members_res = requests.get(f"{DATABASE_URL}/members.json")
-            members_data = members_res.json() if members_res.status_code == 200 and members_res.json() else {}
-
             active_cnt = 0
             notice_cnt = 0
             inactive_cnt = 0
@@ -417,25 +578,35 @@ class DashboardChartsView(APIView):
             monthly_trend_map = {}
 
             for m_id, m_info in members_data.items():
-                if not m_info:
+                if not isinstance(m_info, dict):
+                    continue
+
+                pg_id = m_info.get("pg_id", "")
+                pg_info = pgs_data.get(pg_id, {})
+                if filters["property_type"] and pg_info.get("pg_type", "").lower() != filters["property_type"].lower():
+                    continue
+                if filters["living_type"] and pg_info.get("living_type", "").lower() != filters["living_type"].lower():
+                    continue
+
+                m_status = m_info.get("status", "")
+                if filters["member_status"] and m_status.lower() != filters["member_status"].lower():
+                    continue
+
+                created_at = m_info.get("created_at") or m_info.get("joining_date", "")
+                if not match_date_filter(created_at, filters):
                     continue
 
                 is_deleted = m_info.get("is_deleted")
-                m_status = m_info.get("status", "")
                 rent_val = 0
                 try:
                     rent_val = int(m_info.get("monthly_rent", 0))
                 except (ValueError, TypeError):
                     pass
 
-                pg_id = m_info.get("pg_id", "")
-                if pg_id and pg_id in pgs_data:
-                    pg_info = pgs_data[pg_id]
-                    pg_name = pg_info.get("property_name", pg_info.get("pg_name", pg_info.get("name", pg_id)))
-                    if pg_name in pg_revenue_map:
-                        pg_revenue_map[pg_name] += rent_val
+                pg_name = pg_info.get("property_name", pg_info.get("pg_name", pg_info.get("name", pg_id)))
+                if pg_name in pg_revenue_map:
+                    pg_revenue_map[pg_name] += rent_val
 
-                created_at = m_info.get("created_at", "")
                 if created_at:
                     try:
                         dt = datetime.fromisoformat(created_at)
@@ -478,14 +649,12 @@ class DashboardChartsView(APIView):
                 }
             }
 
-            # Revenue by PG list
             revenue_by_pg = [
                 {"pg_name": name, "revenue": rev}
                 for name, rev in pg_revenue_map.items()
             ]
             revenue_by_pg.sort(key=lambda x: x["revenue"], reverse=True)
 
-            # Monthly rent collection trend list
             monthly_rent_collection_trend = []
             for month_name, amt in monthly_trend_map.items():
                 monthly_rent_collection_trend.append({"month": month_name, "amount": amt})
@@ -513,8 +682,9 @@ class DashboardTablesView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+        filters = extract_dashboard_filters(request)
+
         try:
-            # Parallel fetch of PGs, Members, Rent Records, and Payments
             nodes = fetch_nodes_parallel({
                 "pgs": f"{DATABASE_URL}/pg_properties.json",
                 "members": f"{DATABASE_URL}/members.json",
@@ -531,32 +701,37 @@ class DashboardTablesView(APIView):
             upcoming_rent_due = []
             recent_payments = []
 
-            # Build lookup maps for Member name and PG details
-            member_map = {}
-            for m_id, m_info in members_data.items():
-                if isinstance(m_info, dict):
-                    member_map[m_id] = m_info
+            member_map = {m_id: m_info for m_id, m_info in members_data.items() if isinstance(m_info, dict)}
+            pg_map = {pg_id: pg_info for pg_id, pg_info in pgs_data.items() if isinstance(pg_info, dict)}
 
-            pg_map = {}
-            for pg_id, pg_info in pgs_data.items():
-                if isinstance(pg_info, dict):
-                    pg_map[pg_id] = pg_info
-
-            # Process Rent Records for Upcoming Rent Due
             for r_id, r_info in rent_data.items():
-                if not r_info or not isinstance(r_info, dict):
+                if not isinstance(r_info, dict):
                     continue
 
                 r_status = str(r_info.get("status", "")).lower()
+                if filters["rent_status"] and r_status != filters["rent_status"].lower():
+                    continue
+
                 m_id = r_info.get("member_id", r_id)
                 m_info = member_map.get(m_id, {})
-                
                 if m_info.get("is_deleted"):
                     continue
 
-                m_name = m_info.get("full_name", r_info.get("member_name", "Unknown Member"))
+                if filters["member_status"] and m_info.get("status", "").lower() != filters["member_status"].lower():
+                    continue
+
                 pg_id = r_info.get("pg_id", m_info.get("pg_id", ""))
                 pg_info = pg_map.get(pg_id, {})
+                if filters["property_type"] and pg_info.get("pg_type", "").lower() != filters["property_type"].lower():
+                    continue
+                if filters["living_type"] and pg_info.get("living_type", "").lower() != filters["living_type"].lower():
+                    continue
+
+                r_dt = r_info.get("updated_at") or r_info.get("created_at") or r_info.get("rent_due_date")
+                if not match_date_filter(r_dt, filters):
+                    continue
+
+                m_name = m_info.get("full_name", r_info.get("member_name", "Unknown Member"))
                 pg_name = pg_info.get("property_name", pg_info.get("pg_name", pg_info.get("name", pg_id)))
 
                 room_id = m_info.get("room_id", "")
@@ -573,7 +748,6 @@ class DashboardTablesView(APIView):
 
                 due_date_str = str(r_info.get("rent_due_date", m_info.get("rent_due_date", "")))
 
-                # Calculate days left
                 days_left = 0
                 formatted_due_date = due_date_str
                 if due_date_str:
@@ -619,16 +793,28 @@ class DashboardTablesView(APIView):
                         "status": "Upcoming" if days_left >= 0 else "Overdue"
                     })
 
-            # Process explicit payments node if present
             if payments_data and isinstance(payments_data, dict):
                 recent_payments = []
                 for p_id, p_info in payments_data.items():
-                    if not p_info or not isinstance(p_info, dict):
+                    if not isinstance(p_info, dict):
                         continue
                     m_id = p_info.get("member_id", "")
                     m_info = member_map.get(m_id, {})
+                    if filters["member_status"] and m_info.get("status", "").lower() != filters["member_status"].lower():
+                        continue
                     pg_id = p_info.get("pg_id", m_info.get("pg_id", ""))
                     pg_info = pg_map.get(pg_id, {})
+                    if filters["property_type"] and pg_info.get("pg_type", "").lower() != filters["property_type"].lower():
+                        continue
+                    if filters["living_type"] and pg_info.get("living_type", "").lower() != filters["living_type"].lower():
+                        continue
+                    p_status = p_info.get("status", "Paid")
+                    if filters["rent_status"] and str(p_status).lower() != filters["rent_status"].lower():
+                        continue
+                    p_dt = p_info.get("date") or p_info.get("created_at")
+                    if not match_date_filter(p_dt, filters):
+                        continue
+
                     pg_name = pg_info.get("property_name", pg_info.get("pg_name", pg_info.get("name", pg_id)))
 
                     try:
@@ -644,7 +830,7 @@ class DashboardTablesView(APIView):
                         "pg_name": pg_name,
                         "amount": amt,
                         "date": p_info.get("date", p_info.get("created_at", datetime.now().isoformat())),
-                        "status": p_info.get("status", "Paid")
+                        "status": p_status
                     })
 
             return Response({
@@ -668,8 +854,9 @@ class DashboardAlertsView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+        filters = extract_dashboard_filters(request)
+
         try:
-            # Parallel fetch of PGs, Members, Rent Records, Payments, and Pending Approvals
             nodes = fetch_nodes_parallel({
                 "pgs": f"{DATABASE_URL}/pg_properties.json",
                 "members": f"{DATABASE_URL}/members.json",
@@ -687,27 +874,38 @@ class DashboardAlertsView(APIView):
             rent_overdue = []
             pending_approvals = []
 
-            # Lookup maps
             member_map = {m_id: m_info for m_id, m_info in members_data.items() if isinstance(m_info, dict)}
             pg_map = {pg_id: pg_info for pg_id, pg_info in pgs_data.items() if isinstance(pg_info, dict)}
 
-            # Process Rent Overdue
             for r_id, r_info in rent_data.items():
-                if not r_info or not isinstance(r_info, dict):
+                if not isinstance(r_info, dict):
                     continue
 
                 r_status = str(r_info.get("status", "")).lower()
                 if r_status == "paid":
+                    continue
+                if filters["rent_status"] and r_status != filters["rent_status"].lower():
                     continue
 
                 m_id = r_info.get("member_id", r_id)
                 m_info = member_map.get(m_id, {})
                 if m_info.get("is_deleted"):
                     continue
+                if filters["member_status"] and m_info.get("status", "").lower() != filters["member_status"].lower():
+                    continue
 
-                m_name = m_info.get("full_name", r_info.get("member_name", "Unknown Member"))
                 pg_id = r_info.get("pg_id", m_info.get("pg_id", ""))
                 pg_info = pg_map.get(pg_id, {})
+                if filters["property_type"] and pg_info.get("pg_type", "").lower() != filters["property_type"].lower():
+                    continue
+                if filters["living_type"] and pg_info.get("living_type", "").lower() != filters["living_type"].lower():
+                    continue
+
+                r_dt = r_info.get("updated_at") or r_info.get("created_at") or r_info.get("rent_due_date")
+                if not match_date_filter(r_dt, filters):
+                    continue
+
+                m_name = m_info.get("full_name", r_info.get("member_name", "Unknown Member"))
                 pg_name = pg_info.get("property_name", pg_info.get("pg_name", pg_info.get("name", pg_id)))
 
                 room_id = m_info.get("room_id", "")
@@ -759,7 +957,6 @@ class DashboardAlertsView(APIView):
                         "status": "Overdue"
                     })
 
-            # Process Pending Approvals (from pending_approvals node or payments node)
             combined_pending = {}
             if pending_appr_data and isinstance(pending_appr_data, dict):
                 combined_pending.update(pending_appr_data)
@@ -770,12 +967,24 @@ class DashboardAlertsView(APIView):
                         combined_pending[p_id] = p_info
 
             for p_id, p_info in combined_pending.items():
-                if not p_info or not isinstance(p_info, dict):
+                if not isinstance(p_info, dict):
                     continue
                 m_id = p_info.get("member_id", "")
                 m_info = member_map.get(m_id, {})
+                if filters["member_status"] and m_info.get("status", "").lower() != filters["member_status"].lower():
+                    continue
+
                 pg_id = p_info.get("pg_id", m_info.get("pg_id", ""))
                 pg_info = pg_map.get(pg_id, {})
+                if filters["property_type"] and pg_info.get("pg_type", "").lower() != filters["property_type"].lower():
+                    continue
+                if filters["living_type"] and pg_info.get("living_type", "").lower() != filters["living_type"].lower():
+                    continue
+
+                p_dt = p_info.get("submitted_on") or p_info.get("date") or p_info.get("created_at")
+                if not match_date_filter(p_dt, filters):
+                    continue
+
                 pg_name = pg_info.get("property_name", pg_info.get("pg_name", pg_info.get("name", pg_id)))
 
                 try:
@@ -801,6 +1010,7 @@ class DashboardAlertsView(APIView):
 
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 
 

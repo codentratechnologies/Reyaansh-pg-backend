@@ -230,7 +230,19 @@ Fetches aggregated top-level KPI metrics across properties, rooms, beds, members
 
 #### Parameters
 - **Headers:** `Authorization: Bearer <access_token>`
-- **Query Parameters:** None
+- **Query Parameters (All Dashboard GET APIs support these optional filters):**
+
+| Parameter | Type | Description |
+| :--- | :--- | :--- |
+| `property_type` *(or `pg_type`)* | String | Filter by property type (e.g. `PG`, `Apartment`). |
+| `living_type` | String | Filter by living type (e.g. `Boys`, `Girls`, `Family`). |
+| `member_status` *(or `status`)* | String | Filter by member status (e.g. `Active`, `Notice Period`, `Inactive`). |
+| `rent_status` | String | Filter by rent status (e.g. `Paid`, `Pending`, `Overdue`). |
+| `month` | String / Int | Filter by month (e.g. `8`, `08`, `Aug`, `August`). |
+| `year` | String / Int | Filter by year (e.g. `2026`). |
+| `date_range` | String | Custom date range string (e.g. `2026-08-01,2026-08-31` or `2026-08-01 to 2026-08-31`). |
+| `start_date` / `end_date` | String | Specific start and end dates (e.g. `2026-08-01`). |
+| `quick_range` | String | Predefined range (`today`, `yesterday`, `this_week`, `last_week`, `this_month`, `last_month`, `this_year`, `7days`, `30days`, `90days`). |
 
 #### Example Response (`200 OK`)
 ```json

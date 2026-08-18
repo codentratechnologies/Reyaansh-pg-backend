@@ -112,7 +112,16 @@ class MemberView(APIView):
                     "data": member_data
                 }, status=status.HTTP_200_OK)
 
-            # --- ALL MEMBERS (PAGINATED) ---
+            # Search & Filter Parameters (Query Params or Headers)
+            search_param = request.query_params.get("search") or request.headers.get("search")
+            member_name_param = request.query_params.get("member_name") or request.query_params.get("name") or request.headers.get("member_name")
+            pg_name_param = request.query_params.get("pg_name") or request.headers.get("pg_name")
+            gender_param = request.query_params.get("gender") or request.headers.get("gender")
+            member_status_param = request.query_params.get("member_status") or request.query_params.get("status") or request.headers.get("member_status")
+            rent_status_param = request.query_params.get("rent_status") or request.headers.get("rent_status")
+            joining_date_param = request.query_params.get("joining_date") or request.query_params.get("created_at") or request.headers.get("joining_date")
+
+            # --- ALL MEMBERS (PAGINATED & FILTERED) ---
             url = f"{DATABASE_URL}/members.json"
             res = http_session.get(url)
             res.raise_for_status()
@@ -150,9 +159,44 @@ class MemberView(APIView):
                             if isinstance(bed_info, dict):
                                 bed_name = bed_info.get("bed_number", bed_info.get("bed_name", bed_info.get("name", bed_id)))
 
+                m_name = m_data.get("full_name", m_data.get("name", ""))
+                m_gender = m_data.get("gender", "")
+                m_status = m_data.get("status", "")
+                m_joining_date = m_data.get("joining_date", m_data.get("created_at", ""))
+
+                # Apply search filter (matches member name or pg name)
+                if search_param:
+                    s_lower = search_param.lower()
+                    if s_lower not in m_name.lower() and s_lower not in str(pg_name).lower():
+                        continue
+
+                # Apply member_name filter
+                if member_name_param and member_name_param.lower() not in m_name.lower():
+                    continue
+
+                # Apply pg_name filter
+                if pg_name_param and pg_name_param.lower() not in str(pg_name).lower():
+                    continue
+
+                # Apply gender filter
+                if gender_param and m_gender.lower() != gender_param.lower():
+                    continue
+
+                # Apply member_status filter
+                if member_status_param and m_status.lower() != member_status_param.lower():
+                    continue
+
+                # Apply rent_status filter
+                if rent_status_param and rent_status.lower() != rent_status_param.lower():
+                    continue
+
+                # Apply joining_date filter
+                if joining_date_param and joining_date_param.lower() not in str(m_joining_date).lower():
+                    continue
+
                 formatted_members.append({
                     "id": m_id,
-                    "name": m_data.get("full_name", ""),
+                    "name": m_name,
                     "mobile": m_data.get("mobile_number", ""),
                     "pg_name": pg_name,
                     "room_number": room_name,
@@ -160,7 +204,9 @@ class MemberView(APIView):
                     "monthly_rent": m_data.get("monthly_rent", 0),
                     "due_date": m_data.get("rent_due_date", ""),
                     "rent_status": rent_status,
-                    "member_status": m_data.get("status", "")
+                    "member_status": m_status,
+                    "gender": m_gender,
+                    "joining_date": m_joining_date
                 })
 
             formatted_members.reverse()
@@ -614,3 +660,159 @@ class MemberView(APIView):
             "message": "Member deleted successfully",
             "member_id": member_id
         }, status=status.HTTP_200_OK)
+
+
+class PgAvailabilityView(APIView):
+    """
+    GET API to fetch active PGs with available rooms and beds.
+    Endpoint in PgMembers for checking availability when adding/managing members.
+    Supports filtering by pg_id, city, state, living_type, property_type, and search.
+    """
+    authentication_classes = [JWTAuthentication]
+
+    def get(self, request):
+        if not DATABASE_URL:
+            return Response(
+                {"detail": "Firebase database URL is not configured."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        f_pg_id = request.GET.get("pg_id") or request.headers.get("pg_id")
+        f_city = request.GET.get("city") or request.headers.get("city")
+        f_state = request.GET.get("state") or request.headers.get("state")
+        f_living_type = request.GET.get("living_type") or request.headers.get("living_type")
+        f_property_type = request.GET.get("property_type") or request.query_params.get("pg_type") or request.headers.get("property_type")
+        f_search = request.GET.get("search") or request.headers.get("search")
+
+        url = f"{DATABASE_URL}/pg_properties.json"
+
+        try:
+            response = http_session.get(url)
+            response.raise_for_status()
+            data = response.json() or {}
+
+            availability_list = []
+
+            for key, pg in data.items():
+                if not isinstance(pg, dict):
+                    continue
+
+                # 1. Must be an active property
+                property_status = pg.get("property_status")
+                is_active = property_status is True or str(property_status).lower() in ["true", "active"]
+                if not is_active:
+                    continue
+
+                pg_id = pg.get("pg_id", key)
+                pg_name = pg.get("property_name", pg.get("name", pg.get("pg_name", "")))
+                pg_type = pg.get("pg_type", "PG")
+                living_type = pg.get("living_type", "")
+                city = pg.get("city", "")
+                state = pg.get("state", "")
+                area = pg.get("area", "")
+
+                # Filters
+                if f_pg_id and pg_id != f_pg_id:
+                    continue
+                if f_city and city.lower() != f_city.lower():
+                    continue
+                if f_state and state.lower() != f_state.lower():
+                    continue
+                if f_living_type and living_type.lower() != f_living_type.lower():
+                    continue
+                if f_property_type and pg_type.lower() != f_property_type.lower():
+                    continue
+                if f_search:
+                    s_term = f_search.lower()
+                    if s_term not in pg_id.lower() and s_term not in pg_name.lower() and s_term not in city.lower() and s_term not in area.lower():
+                        continue
+
+                rooms_dict = pg.get("rooms", {})
+                available_rooms = []
+                total_rooms = len(rooms_dict) if isinstance(rooms_dict, dict) else 0
+                total_beds = 0
+                occupied_beds = 0
+                available_beds_count = 0
+
+                if isinstance(rooms_dict, dict):
+                    for room_id, r_info in rooms_dict.items():
+                        if not isinstance(r_info, dict):
+                            continue
+
+                        room_number = r_info.get("room_number", r_info.get("flat_no", r_info.get("name", room_id)))
+                        sharing = r_info.get("sharing", r_info.get("bhk", 1))
+                        rent = r_info.get("rent", 0)
+                        beds_dict = r_info.get("beds", {})
+
+                        available_beds_in_room = []
+                        if isinstance(beds_dict, dict) and beds_dict:
+                            for bed_id, b_info in beds_dict.items():
+                                if not isinstance(b_info, dict):
+                                    continue
+                                total_beds += 1
+                                is_occupied = b_info.get("is_occupied", False)
+                                if is_occupied:
+                                    occupied_beds += 1
+                                else:
+                                    available_beds_count += 1
+                                    available_beds_in_room.append({
+                                        "bed_id": bed_id,
+                                        "bed_name": b_info.get("bed_name", b_info.get("name", bed_id))
+                                    })
+
+                            if available_beds_in_room:
+                                available_rooms.append({
+                                    "room_id": room_id,
+                                    "room_number": room_number,
+                                    "sharing": sharing,
+                                    "rent": rent,
+                                    "available_beds_count": len(available_beds_in_room),
+                                    "available_beds": available_beds_in_room
+                                })
+                        else:
+                            # Apartment / flat unit
+                            is_occupied = r_info.get("is_occupied", False)
+                            total_beds += 1
+                            if is_occupied:
+                                occupied_beds += 1
+                            else:
+                                available_beds_count += 1
+                                available_rooms.append({
+                                    "room_id": room_id,
+                                    "flat_no": room_number,
+                                    "bhk": sharing,
+                                    "rent": rent,
+                                    "is_available": True
+                                })
+
+                availability_list.append({
+                    "pg_id": pg_id,
+                    "pg_name": pg_name,
+                    "pg_type": pg_type,
+                    "living_type": living_type,
+                    "contact_person": pg.get("contact_person", ""),
+                    "mobile": pg.get("mobile", ""),
+                    "address_line_1": pg.get("address_line_1", ""),
+                    "area": area,
+                    "city": city,
+                    "state": state,
+                    "pincode": pg.get("pincode", ""),
+                    "total_rooms": total_rooms,
+                    "total_beds": total_beds,
+                    "occupied_beds": occupied_beds,
+                    "available_beds": available_beds_count,
+                    "available_rooms": available_rooms
+                })
+
+            return Response({
+                "message": "Available PGs fetched successfully",
+                "total_active_pgs": len(availability_list),
+                "data": availability_list
+            }, status=status.HTTP_200_OK)
+
+        except requests.exceptions.RequestException as e:
+            return Response(
+                {"detail": f"Failed to fetch availability from Firebase: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+

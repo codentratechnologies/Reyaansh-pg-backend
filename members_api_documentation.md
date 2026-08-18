@@ -29,6 +29,7 @@ All member endpoints require JWT authentication.
 | Method | Endpoint | Description | Auth Required |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/api/members` | Fetch paginated list of all active members or single member details | ✅ Yes |
+| `GET` | `/api/pg/availability` | Fetch active PGs with available rooms & beds for assigning new members | ✅ Yes |
 | `POST` | `/api/members` | Register a new member, check bed availability, and assign bed/rent | ✅ Yes |
 | `PUT` / `PATCH` | `/api/members` | Update existing member profile, handle room/bed transfer & rent sync | ✅ Yes |
 | `DELETE` | `/api/members` | Soft-delete a member, free occupied bed, and delete rent record | ✅ Yes |
@@ -44,11 +45,18 @@ Retrieves a paginated list of all active members or single member details if `me
 - **Endpoint:** `/api/members`
 - **Authentication:** Required (`Bearer Token` or `access_token` Cookie)
 
-#### Query Parameters
+#### Query Parameters (Can be sent in URL Query Params or Headers)
 
 | Parameter | Type | Required | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `member_id` *(or `id`)* | String | No | - | If provided, returns complete details of this single member. |
+| `search` | String | No | - | Case-insensitive substring search matching member name OR PG name. |
+| `member_name` *(or `name`)* | String | No | - | Case-insensitive substring filter for member name. |
+| `pg_name` | String | No | - | Case-insensitive substring filter for PG property name. |
+| `gender` | String | No | - | Filter by member gender (e.g. `Male`, `Female`, `Other`). |
+| `member_status` *(or `status`)* | String | No | - | Filter by member status (e.g. `Active`, `Notice Period`, `Inactive`). |
+| `rent_status` | String | No | - | Filter by member rent status (e.g. `Paid`, `Pending`, `Overdue`). |
+| `joining_date` *(or `created_at`)* | String | No | - | Filter by member joining/registration date (e.g. `2026-08-18`). |
 | `page` | Integer | No | `1` | Page number for paginated list. |
 | `page_size` | Integer | No | `10` | Number of items per page. |
 
