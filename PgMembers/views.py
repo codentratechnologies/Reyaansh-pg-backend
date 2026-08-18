@@ -1,5 +1,7 @@
 import os
 import requests
+from requests.adapters import HTTPAdapter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
@@ -12,6 +14,30 @@ from DashBoard.security import JWTAuthentication
 
 load_dotenv()
 DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL")
+
+# Reusable HTTP Session with connection pooling for fast Firebase API performance
+http_session = requests.Session()
+adapter = HTTPAdapter(pool_connections=30, pool_maxsize=30)
+http_session.mount("https://", adapter)
+http_session.mount("http://", adapter)
+
+def fetch_nodes_parallel(url_dict):
+    """
+    Fetches multiple Firebase URLs concurrently using thread pool.
+    """
+    def fetch_one(item):
+        key, url = item
+        try:
+            res = http_session.get(url, timeout=5)
+            if res.status_code == 200 and res.json():
+                return key, res.json()
+        except Exception:
+            pass
+        return key, {}
+
+    with ThreadPoolExecutor(max_workers=max(1, len(url_dict))) as executor:
+        results = dict(executor.map(fetch_one, url_dict.items()))
+    return results
 
 def get_ist_now():
     """Returns current time in Indian Standard Time (IST)"""
@@ -34,20 +60,18 @@ class MemberView(APIView):
         member_id = request.query_params.get("member_id") or request.query_params.get("id")
         
         try:
-            # Fetch rent records to try resolving rent status
-            rent_records_url = f"{DATABASE_URL}/rent_records.json"
-            rent_res = requests.get(rent_records_url)
-            rent_records = rent_res.json() if rent_res.status_code == 200 and rent_res.json() else {}
-
-            # Fetch PG properties to resolve actual names
-            pg_props_url = f"{DATABASE_URL}/pg_properties.json"
-            pg_res = requests.get(pg_props_url)
-            pg_properties = pg_res.json() if pg_res.status_code == 200 and pg_res.json() else {}
+            # Parallel fetch of rent records and pg properties
+            nodes = fetch_nodes_parallel({
+                "rent": f"{DATABASE_URL}/rent_records.json",
+                "pgs": f"{DATABASE_URL}/pg_properties.json"
+            })
+            rent_records = nodes["rent"]
+            pg_properties = nodes["pgs"]
 
             # --- SINGLE MEMBER FULL DETAILS ---
             if member_id:
                 url = f"{DATABASE_URL}/members/{member_id}.json"
-                res = requests.get(url)
+                res = http_session.get(url)
                 res.raise_for_status()
                 member_data = res.json()
                 
@@ -88,9 +112,9 @@ class MemberView(APIView):
                     "data": member_data
                 }, status=status.HTTP_200_OK)
 
-            # --- ALL MEMBERS (PAGINATED WITH SUMMARY) ---
+            # --- ALL MEMBERS (PAGINATED) ---
             url = f"{DATABASE_URL}/members.json"
-            res = requests.get(url)
+            res = http_session.get(url)
             res.raise_for_status()
             members_dict = res.json() or {}
 

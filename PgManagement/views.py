@@ -1,6 +1,7 @@
 import os
 import uuid
 import requests
+from requests.adapters import HTTPAdapter
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
@@ -13,6 +14,12 @@ from DashBoard.security import JWTAuthentication
 
 load_dotenv()
 DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL")
+
+# Reusable HTTP Session with connection pooling for high performance
+http_session = requests.Session()
+adapter = HTTPAdapter(pool_connections=30, pool_maxsize=30)
+http_session.mount("https://", adapter)
+http_session.mount("http://", adapter)
 
 def get_ist_now():
     """Returns current time in Indian Standard Time (IST)"""

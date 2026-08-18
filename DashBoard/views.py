@@ -1,9 +1,12 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from datetime import timedelta
+from datetime import timedelta, datetime, date
+from zoneinfo import ZoneInfo
 import os
 import requests
+from requests.adapters import HTTPAdapter
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
 from .security import hash_password, create_token, JWTAuthentication, verify_token
@@ -11,6 +14,30 @@ from .firebase_client import get_admin_user, create_admin_user, update_last_logi
 
 load_dotenv()
 DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL")
+
+# Reusable HTTP Session with connection pooling for high performance
+http_session = requests.Session()
+adapter = HTTPAdapter(pool_connections=30, pool_maxsize=30)
+http_session.mount("https://", adapter)
+http_session.mount("http://", adapter)
+
+def fetch_nodes_parallel(url_dict):
+    """
+    Fetches multiple Firebase URLs concurrently using thread pool for ultra-fast API responses.
+    """
+    def fetch_one(item):
+        key, url = item
+        try:
+            res = http_session.get(url, timeout=5)
+            if res.status_code == 200 and res.json():
+                return key, res.json()
+        except Exception:
+            pass
+        return key, {}
+
+    with ThreadPoolExecutor(max_workers=max(1, len(url_dict))) as executor:
+        results = dict(executor.map(fetch_one, url_dict.items()))
+    return results
 
 class SetupAdminView(APIView):
     """
@@ -202,9 +229,15 @@ class DashboardKPIView(APIView):
             )
 
         try:
-            # 1. Fetch PGs
-            pg_res = requests.get(f"{DATABASE_URL}/pg_properties.json")
-            pgs_data = pg_res.json() if pg_res.status_code == 200 and pg_res.json() else {}
+            # Parallel fetch of PGs, Members, and Rent Records
+            nodes = fetch_nodes_parallel({
+                "pgs": f"{DATABASE_URL}/pg_properties.json",
+                "members": f"{DATABASE_URL}/members.json",
+                "rent": f"{DATABASE_URL}/rent_records.json"
+            })
+            pgs_data = nodes["pgs"]
+            members_data = nodes["members"]
+            rent_data = nodes["rent"]
 
             total_pgs = 0
             active_pgs = 0
@@ -234,10 +267,6 @@ class DashboardKPIView(APIView):
                                 for b_id, b_info in beds.items():
                                     if isinstance(b_info, dict) and b_info.get("is_occupied"):
                                         occupied_beds += 1
-
-            # 2. Fetch Members
-            members_res = requests.get(f"{DATABASE_URL}/members.json")
-            members_data = members_res.json() if members_res.status_code == 200 and members_res.json() else {}
 
             total_members = 0
             active_members = 0
@@ -332,9 +361,13 @@ class DashboardChartsView(APIView):
             )
 
         try:
-            # 1. Fetch PGs
-            pg_res = requests.get(f"{DATABASE_URL}/pg_properties.json")
-            pgs_data = pg_res.json() if pg_res.status_code == 200 and pg_res.json() else {}
+            # Parallel fetch of PGs and Members
+            nodes = fetch_nodes_parallel({
+                "pgs": f"{DATABASE_URL}/pg_properties.json",
+                "members": f"{DATABASE_URL}/members.json"
+            })
+            pgs_data = nodes["pgs"]
+            members_data = nodes["members"]
 
             total_beds = 0
             occupied_beds = 0
@@ -466,5 +499,309 @@ class DashboardChartsView(APIView):
 
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class DashboardTablesView(APIView):
+    """
+    GET API to calculate and return dashboard tables data (upcoming rent dues and recent payments) dynamically from Firebase.
+    """
+    authentication_classes = [JWTAuthentication]
+
+    def get(self, request):
+        if not DATABASE_URL:
+            return Response(
+                {"detail": "Firebase database URL is not configured."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        try:
+            # Parallel fetch of PGs, Members, Rent Records, and Payments
+            nodes = fetch_nodes_parallel({
+                "pgs": f"{DATABASE_URL}/pg_properties.json",
+                "members": f"{DATABASE_URL}/members.json",
+                "rent": f"{DATABASE_URL}/rent_records.json",
+                "payments": f"{DATABASE_URL}/payments.json"
+            })
+            pgs_data = nodes["pgs"]
+            members_data = nodes["members"]
+            rent_data = nodes["rent"]
+            payments_data = nodes["payments"]
+
+            today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+
+            upcoming_rent_due = []
+            recent_payments = []
+
+            # Build lookup maps for Member name and PG details
+            member_map = {}
+            for m_id, m_info in members_data.items():
+                if isinstance(m_info, dict):
+                    member_map[m_id] = m_info
+
+            pg_map = {}
+            for pg_id, pg_info in pgs_data.items():
+                if isinstance(pg_info, dict):
+                    pg_map[pg_id] = pg_info
+
+            # Process Rent Records for Upcoming Rent Due
+            for r_id, r_info in rent_data.items():
+                if not r_info or not isinstance(r_info, dict):
+                    continue
+
+                r_status = str(r_info.get("status", "")).lower()
+                m_id = r_info.get("member_id", r_id)
+                m_info = member_map.get(m_id, {})
+                
+                if m_info.get("is_deleted"):
+                    continue
+
+                m_name = m_info.get("full_name", r_info.get("member_name", "Unknown Member"))
+                pg_id = r_info.get("pg_id", m_info.get("pg_id", ""))
+                pg_info = pg_map.get(pg_id, {})
+                pg_name = pg_info.get("property_name", pg_info.get("pg_name", pg_info.get("name", pg_id)))
+
+                room_id = m_info.get("room_id", "")
+                room_number = room_id
+                if pg_id and "rooms" in pg_info and isinstance(pg_info.get("rooms"), dict) and room_id in pg_info["rooms"]:
+                    room_info = pg_info["rooms"][room_id]
+                    if isinstance(room_info, dict):
+                        room_number = room_info.get("room_number", room_info.get("room_name", room_number))
+
+                try:
+                    rent_amt = int(r_info.get("monthly_rent", m_info.get("monthly_rent", 0)))
+                except (ValueError, TypeError):
+                    rent_amt = 0
+
+                due_date_str = str(r_info.get("rent_due_date", m_info.get("rent_due_date", "")))
+
+                # Calculate days left
+                days_left = 0
+                formatted_due_date = due_date_str
+                if due_date_str:
+                    try:
+                        if len(due_date_str) <= 2:
+                            day_num = int(due_date_str)
+                            due_dt = date(today.year, today.month, day_num)
+                            if due_dt < today:
+                                month_val = today.month % 12 + 1
+                                year_val = today.year + (1 if today.month == 12 else 0)
+                                due_dt = date(year_val, month_val, day_num)
+                            formatted_due_date = due_dt.strftime("%Y-%m-%d")
+                            days_left = (due_dt - today).days
+                        else:
+                            dt = datetime.fromisoformat(due_date_str).date()
+                            formatted_due_date = dt.strftime("%Y-%m-%d")
+                            days_left = (dt - today).days
+                    except Exception:
+                        pass
+
+                if r_status == "paid":
+                    recent_payments.append({
+                        "payment_id": f"PAY_{r_id}",
+                        "member_id": m_id,
+                        "pg_id": pg_id,
+                        "member_name": m_name,
+                        "pg_name": pg_name,
+                        "amount": rent_amt,
+                        "date": r_info.get("updated_at", r_info.get("created_at", datetime.now().isoformat())),
+                        "status": "Paid"
+                    })
+                else:
+                    upcoming_rent_due.append({
+                        "rent_id": r_id,
+                        "member_id": m_id,
+                        "pg_id": pg_id,
+                        "member_name": m_name,
+                        "pg_name": pg_name,
+                        "room_number": room_number,
+                        "rent_amount": rent_amt,
+                        "due_date": formatted_due_date,
+                        "days_left": max(0, days_left),
+                        "status": "Upcoming" if days_left >= 0 else "Overdue"
+                    })
+
+            # Process explicit payments node if present
+            if payments_data and isinstance(payments_data, dict):
+                recent_payments = []
+                for p_id, p_info in payments_data.items():
+                    if not p_info or not isinstance(p_info, dict):
+                        continue
+                    m_id = p_info.get("member_id", "")
+                    m_info = member_map.get(m_id, {})
+                    pg_id = p_info.get("pg_id", m_info.get("pg_id", ""))
+                    pg_info = pg_map.get(pg_id, {})
+                    pg_name = pg_info.get("property_name", pg_info.get("pg_name", pg_info.get("name", pg_id)))
+
+                    try:
+                        amt = int(p_info.get("amount", p_info.get("monthly_rent", 0)))
+                    except (ValueError, TypeError):
+                        amt = 0
+
+                    recent_payments.append({
+                        "payment_id": p_id,
+                        "member_id": m_id,
+                        "pg_id": pg_id,
+                        "member_name": m_info.get("full_name", p_info.get("member_name", "Unknown Member")),
+                        "pg_name": pg_name,
+                        "amount": amt,
+                        "date": p_info.get("date", p_info.get("created_at", datetime.now().isoformat())),
+                        "status": p_info.get("status", "Paid")
+                    })
+
+            return Response({
+                "upcoming_rent_due": upcoming_rent_due,
+                "recent_payments": recent_payments
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class DashboardAlertsView(APIView):
+    """
+    GET API to calculate and return dashboard alerts (rent overdue and pending payment approvals) dynamically from Firebase.
+    """
+    authentication_classes = [JWTAuthentication]
+
+    def get(self, request):
+        if not DATABASE_URL:
+            return Response(
+                {"detail": "Firebase database URL is not configured."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        try:
+            # Parallel fetch of PGs, Members, Rent Records, Payments, and Pending Approvals
+            nodes = fetch_nodes_parallel({
+                "pgs": f"{DATABASE_URL}/pg_properties.json",
+                "members": f"{DATABASE_URL}/members.json",
+                "rent": f"{DATABASE_URL}/rent_records.json",
+                "payments": f"{DATABASE_URL}/payments.json",
+                "pending_approvals": f"{DATABASE_URL}/pending_approvals.json"
+            })
+            pgs_data = nodes["pgs"]
+            members_data = nodes["members"]
+            rent_data = nodes["rent"]
+            payments_data = nodes["payments"]
+            pending_appr_data = nodes["pending_approvals"]
+            today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+
+            rent_overdue = []
+            pending_approvals = []
+
+            # Lookup maps
+            member_map = {m_id: m_info for m_id, m_info in members_data.items() if isinstance(m_info, dict)}
+            pg_map = {pg_id: pg_info for pg_id, pg_info in pgs_data.items() if isinstance(pg_info, dict)}
+
+            # Process Rent Overdue
+            for r_id, r_info in rent_data.items():
+                if not r_info or not isinstance(r_info, dict):
+                    continue
+
+                r_status = str(r_info.get("status", "")).lower()
+                if r_status == "paid":
+                    continue
+
+                m_id = r_info.get("member_id", r_id)
+                m_info = member_map.get(m_id, {})
+                if m_info.get("is_deleted"):
+                    continue
+
+                m_name = m_info.get("full_name", r_info.get("member_name", "Unknown Member"))
+                pg_id = r_info.get("pg_id", m_info.get("pg_id", ""))
+                pg_info = pg_map.get(pg_id, {})
+                pg_name = pg_info.get("property_name", pg_info.get("pg_name", pg_info.get("name", pg_id)))
+
+                room_id = m_info.get("room_id", "")
+                room_number = room_id
+                if pg_id and "rooms" in pg_info and isinstance(pg_info.get("rooms"), dict) and room_id in pg_info["rooms"]:
+                    room_info = pg_info["rooms"][room_id]
+                    if isinstance(room_info, dict):
+                        room_number = room_info.get("room_number", room_info.get("room_name", room_number))
+
+                try:
+                    rent_amt = int(r_info.get("monthly_rent", m_info.get("monthly_rent", 0)))
+                except (ValueError, TypeError):
+                    rent_amt = 0
+
+                due_date_str = str(r_info.get("rent_due_date", m_info.get("rent_due_date", "")))
+
+                overdue_by_days = 0
+                formatted_due_date = due_date_str
+
+                if due_date_str:
+                    try:
+                        if len(due_date_str) <= 2:
+                            day_num = int(due_date_str)
+                            due_dt = date(today.year, today.month, day_num)
+                            if due_dt > today:
+                                month_val = today.month - 1 if today.month > 1 else 12
+                                year_val = today.year - (1 if today.month == 1 else 0)
+                                due_dt = date(year_val, month_val, day_num)
+                            formatted_due_date = due_dt.strftime("%Y-%m-%d")
+                            overdue_by_days = (today - due_dt).days
+                        else:
+                            dt = datetime.fromisoformat(due_date_str).date()
+                            formatted_due_date = dt.strftime("%Y-%m-%d")
+                            overdue_by_days = (today - dt).days
+                    except Exception:
+                        pass
+
+                if overdue_by_days > 0 or r_status == "overdue":
+                    rent_overdue.append({
+                        "rent_id": r_id,
+                        "member_id": m_id,
+                        "pg_id": pg_id,
+                        "member_name": m_name,
+                        "pg_name": pg_name,
+                        "room_number": room_number,
+                        "rent_amount": rent_amt,
+                        "due_date": formatted_due_date,
+                        "overdue_by_days": max(1, overdue_by_days),
+                        "status": "Overdue"
+                    })
+
+            # Process Pending Approvals (from pending_approvals node or payments node)
+            combined_pending = {}
+            if pending_appr_data and isinstance(pending_appr_data, dict):
+                combined_pending.update(pending_appr_data)
+
+            if payments_data and isinstance(payments_data, dict):
+                for p_id, p_info in payments_data.items():
+                    if isinstance(p_info, dict) and str(p_info.get("status", "")).lower() in ["pending", "pending_approval", "pending approval"]:
+                        combined_pending[p_id] = p_info
+
+            for p_id, p_info in combined_pending.items():
+                if not p_info or not isinstance(p_info, dict):
+                    continue
+                m_id = p_info.get("member_id", "")
+                m_info = member_map.get(m_id, {})
+                pg_id = p_info.get("pg_id", m_info.get("pg_id", ""))
+                pg_info = pg_map.get(pg_id, {})
+                pg_name = pg_info.get("property_name", pg_info.get("pg_name", pg_info.get("name", pg_id)))
+
+                try:
+                    amt = int(p_info.get("amount", p_info.get("monthly_rent", 0)))
+                except (ValueError, TypeError):
+                    amt = 0
+
+                pending_approvals.append({
+                    "payment_id": p_id,
+                    "member_id": m_id,
+                    "pg_id": pg_id,
+                    "member_name": m_info.get("full_name", p_info.get("member_name", "Unknown Member")),
+                    "pg_name": pg_name,
+                    "amount": amt,
+                    "payment_type": p_info.get("payment_type", p_info.get("mode", "UPI")),
+                    "submitted_on": p_info.get("submitted_on", p_info.get("created_at", datetime.now().isoformat()))
+                })
+
+            return Response({
+                "rent_overdue": rent_overdue,
+                "pending_approvals": pending_approvals
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 
 

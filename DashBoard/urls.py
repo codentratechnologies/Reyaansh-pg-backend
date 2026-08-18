@@ -1,7 +1,7 @@
 from django.urls import path
 from .views import (
     SetupAdminView, LoginView, ProtectedDataView, RefreshTokenView, 
-    AdminDetailsView, DashboardKPIView, DashboardChartsView
+    AdminDetailsView, DashboardKPIView, DashboardChartsView, DashboardTablesView, DashboardAlertsView
 )
 
 urlpatterns = [
@@ -12,4 +12,6 @@ urlpatterns = [
     path('admin-details/', AdminDetailsView.as_view(), name='admin_details'),
     path('dashboard-kpis/', DashboardKPIView.as_view(), name='dashboard_kpis'),
     path('dashboard-charts/', DashboardChartsView.as_view(), name='dashboard_charts'),
+    path('dashboard-tables/', DashboardTablesView.as_view(), name='dashboard_tables'),
+    path('dashboard-alerts/', DashboardAlertsView.as_view(), name='dashboard_alerts'),
 ]
