@@ -370,6 +370,16 @@ class MemberView(APIView):
             payload["bed_id"] = bed_id
         if status_val == 'Notice Period' and data.get("status_reason"):
             payload["status_reason"] = str(data.get("status_reason"))
+            
+        if "fcm_token" in data and data.get("fcm_token"):
+            payload["fcm_token"] = str(data.get("fcm_token"))
+        elif "fcmToken" in data and data.get("fcmToken"):
+            payload["fcm_token"] = str(data.get("fcmToken"))
+
+        if "device_code" in data and data.get("device_code"):
+            payload["device_code"] = str(data.get("device_code"))
+        elif "deviceCode" in data and data.get("deviceCode"):
+            payload["device_code"] = str(data.get("deviceCode"))
 
         # 4. Generate Proper Member ID (MEM001, MEM002, etc.)
         try:
