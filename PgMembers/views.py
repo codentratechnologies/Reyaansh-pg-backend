@@ -10,7 +10,6 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
-from DashBoard.security import JWTAuthentication
 
 load_dotenv()
 DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL")
@@ -48,7 +47,6 @@ class MemberView(APIView):
     POST/PUT/DELETE/GET API to manage a member in Firebase Realtime Database.
     Node Name: members
     """
-    authentication_classes = [JWTAuthentication]
 
     def get(self, request):
         if not DATABASE_URL:
@@ -678,7 +676,6 @@ class PgAvailabilityView(APIView):
     Endpoint in PgMembers for checking availability when adding/managing members.
     Supports filtering by pg_id, city, state, living_type, property_type, and search.
     """
-    authentication_classes = [JWTAuthentication]
 
     def get(self, request):
         if not DATABASE_URL:
