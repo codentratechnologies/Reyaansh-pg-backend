@@ -10,7 +10,6 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
-from DashBoard.security import JWTAuthentication
 
 load_dotenv()
 DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL")
@@ -48,7 +47,6 @@ class MemberView(APIView):
     POST/PUT/DELETE/GET API to manage a member in Firebase Realtime Database.
     Node Name: members
     """
-    authentication_classes = [JWTAuthentication]
 
     def get(self, request):
         if not DATABASE_URL:
@@ -370,6 +368,16 @@ class MemberView(APIView):
             payload["bed_id"] = bed_id
         if status_val == 'Notice Period' and data.get("status_reason"):
             payload["status_reason"] = str(data.get("status_reason"))
+            
+        if "fcm_token" in data and data.get("fcm_token"):
+            payload["fcm_token"] = str(data.get("fcm_token"))
+        elif "fcmToken" in data and data.get("fcmToken"):
+            payload["fcm_token"] = str(data.get("fcmToken"))
+
+        if "device_code" in data and data.get("device_code"):
+            payload["device_code"] = str(data.get("device_code"))
+        elif "deviceCode" in data and data.get("deviceCode"):
+            payload["device_code"] = str(data.get("deviceCode"))
 
         # 4. Generate Proper Member ID (MEM001, MEM002, etc.)
         try:
@@ -668,7 +676,6 @@ class PgAvailabilityView(APIView):
     Endpoint in PgMembers for checking availability when adding/managing members.
     Supports filtering by pg_id, city, state, living_type, property_type, and search.
     """
-    authentication_classes = [JWTAuthentication]
 
     def get(self, request):
         if not DATABASE_URL:

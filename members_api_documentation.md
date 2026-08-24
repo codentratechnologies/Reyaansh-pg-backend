@@ -216,6 +216,8 @@ Registers a new member in Firebase, generates a sequential ID (`MEM001`, `MEM002
   | `pan_number` | String | No | PAN card number |
   | `driving_licence_number` | String | No | Driving license number |
   | `address_line_2` | String | No | Permanent address line 2 |
+  | `fcm_token` (or `fcmToken`) | String | No | Firebase Cloud Messaging token for push notifications |
+  | `device_code` (or `deviceCode`) | String | No | Unique device identifier code |
 
 #### Example Request Body
 ```json

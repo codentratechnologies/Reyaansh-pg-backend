@@ -136,6 +136,20 @@ class LoginView(APIView):
         )
         return response
 
+class LogoutView(APIView):
+    """
+    Logout endpoint. Clears the access and refresh token cookies.
+    """
+    def post(self, request):
+        response = Response({
+            "message": "Logout successful"
+        }, status=status.HTTP_200_OK)
+        
+        response.delete_cookie('access_token')
+        response.delete_cookie('refresh_token')
+        
+        return response
+
 class RefreshTokenView(APIView):
     """
     Refresh endpoint to mint a new access token using a valid refresh token cookie.

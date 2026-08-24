@@ -25,7 +25,7 @@ SECRET_KEY = 'django-insecure-sbmvdri1=xv8%7=8v5qx@78au%2zq%6yoho1z$-k(4^s-7hw3f
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['constrain-skyline-cubical.ngrok-free.dev', '127.0.0.1', 'localhost']
+ALLOWED_HOSTS = ['constrain-skyline-cubical.ngrok-free.dev', '127.0.0.1', 'localhost', 'tinderbox-bouncing-superbowl.ngrok-free.dev']
 
 
 # Application definition
