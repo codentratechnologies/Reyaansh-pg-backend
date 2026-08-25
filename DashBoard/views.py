@@ -1052,7 +1052,7 @@ class TestNotificationView(APIView):
             DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL")
             if DATABASE_URL:
                 try:
-                    res = requests.get(f"{DATABASE_URL}/members/{member_id}.json", timeout=5)
+                    res = http_session.get(f"{DATABASE_URL}/members/{member_id}.json", timeout=5)
                     if res.status_code == 200 and res.json():
                         fcm_token = res.json().get("fcm_token")
                 except Exception as e:
