@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
 from .security import hash_password, create_token, JWTAuthentication, verify_token
-from .firebase_client import get_admin_user, create_admin_user, update_last_login
+from .firebase_client import get_admin_user, create_admin_user, update_last_login, update_admin_profile
 
 load_dotenv()
 DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL")
@@ -196,6 +196,9 @@ class ProtectedDataView(APIView):
     authentication_classes = [JWTAuthentication]
 
     def post(self, request):
+        if not isinstance(request.user, dict):
+            return Response({"detail": "User not authenticated"}, status=status.HTTP_401_UNAUTHORIZED)
+            
         username = request.user.get("sub")
         data = request.data.get("data")
         
@@ -212,6 +215,9 @@ class AdminDetailsView(APIView):
     authentication_classes = [JWTAuthentication]
 
     def get(self, request):
+        if not isinstance(request.user, dict):
+            return Response({"detail": "User not authenticated"}, status=status.HTTP_401_UNAUTHORIZED)
+            
         email = request.user.get("sub")
         if not email:
             return Response({"detail": "User not authenticated"}, status=status.HTTP_401_UNAUTHORIZED)
@@ -226,6 +232,49 @@ class AdminDetailsView(APIView):
                 del admin_data["password"]
                 
             return Response(admin_data)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class AdminProfileView(APIView):
+    """
+    API to update the currently logged in admin's profile data.
+    Requires a valid JWT token.
+    """
+    authentication_classes = [JWTAuthentication]
+
+    def put(self, request):
+        if not isinstance(request.user, dict):
+            return Response({"detail": "User not authenticated"}, status=status.HTTP_401_UNAUTHORIZED)
+            
+        email = request.user.get("sub")
+        if not email:
+            return Response({"detail": "User not authenticated"}, status=status.HTTP_401_UNAUTHORIZED)
+            
+        name = request.data.get("name")
+        last_name = request.data.get("last_name")
+        profile_email = request.data.get("email")
+        phone_number = request.data.get("phone_number")
+        location = request.data.get("location")
+        
+        # Only update fields that are provided
+        profile_data = {}
+        if name is not None:
+            profile_data["name"] = name
+        if last_name is not None:
+            profile_data["last_name"] = last_name
+        if profile_email is not None:
+            profile_data["email"] = profile_email
+        if phone_number is not None:
+            profile_data["phone_number"] = phone_number
+        if location is not None:
+            profile_data["location"] = location
+            
+        if not profile_data:
+            return Response({"detail": "No profile data provided for update."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            update_admin_profile(email, profile_data)
+            return Response({"message": "Profile updated successfully", "data": profile_data}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

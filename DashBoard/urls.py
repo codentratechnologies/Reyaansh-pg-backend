@@ -2,7 +2,7 @@ from django.urls import path
 from .views import (
     SetupAdminView, LoginView, LogoutView, ProtectedDataView, RefreshTokenView, 
     AdminDetailsView, DashboardKPIView, DashboardChartsView, DashboardTablesView, DashboardAlertsView,
-    TestNotificationView
+    TestNotificationView, AdminProfileView
 )
 
 urlpatterns = [
@@ -12,6 +12,7 @@ urlpatterns = [
     path('refresh/', RefreshTokenView.as_view(), name='refresh_token'),
     path('protected-data/', ProtectedDataView.as_view(), name='protected_data'),
     path('admin-details/', AdminDetailsView.as_view(), name='admin_details'),
+    path('admin-profile/', AdminProfileView.as_view(), name='admin_profile'),
     path('dashboard-kpis/', DashboardKPIView.as_view(), name='dashboard_kpis'),
     path('dashboard-charts/', DashboardChartsView.as_view(), name='dashboard_charts'),
     path('dashboard-tables/', DashboardTablesView.as_view(), name='dashboard_tables'),

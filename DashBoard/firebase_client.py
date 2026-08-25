@@ -87,3 +87,15 @@ def update_last_login(email: str):
     response = http_session.patch(url, json=data, timeout=5)
     response.raise_for_status()
     return True
+
+def update_admin_profile(email: str, profile_data: dict):
+    """
+    Updates the admin profile (name, last_name, email, phone_number, location, etc.)
+    in Firebase.
+    """
+    safe_username = sanitize_username(email)
+    url = f"{DATABASE_URL}/admin/{safe_username}.json"
+    
+    response = http_session.patch(url, json=profile_data, timeout=5)
+    response.raise_for_status()
+    return True
