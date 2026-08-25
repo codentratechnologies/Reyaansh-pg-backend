@@ -20,6 +20,7 @@ staticfiles/
 .env
 *-firebase-adminsdk-*.json
 service-account*.json
+firebase_credentials.json
 
 # IDE / OS
 .vscode/

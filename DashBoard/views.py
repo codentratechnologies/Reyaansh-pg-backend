@@ -1025,7 +1025,48 @@ class DashboardAlertsView(APIView):
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+class TestNotificationView(APIView):
+    """
+    POST API to test sending push notifications.
+    Expected body:
+    {
+        "member_id": "-O123456789",  // Will look up the token in the database
+        // OR "fcm_token": "token_string",
+        "title": "Hello",
+        "body": "Test message",
+        "url": "https://gossip-huntress-clambake.ngrok-free.dev/checkout"
+    }
+    """
+    def post(self, request):
+        fcm_token = request.data.get("fcm_token")
+        member_id = request.data.get("member_id")
+        title = request.data.get("title", "Test Title")
+        body = request.data.get("body", "Test Body")
+        url = request.data.get("url")
+        icon_url = request.data.get("icon_url")
+        
+        # If no token is provided but member_id is, look it up in the DB!
+        if not fcm_token and member_id:
+            import os
+            import requests
+            DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL")
+            if DATABASE_URL:
+                try:
+                    res = requests.get(f"{DATABASE_URL}/members/{member_id}.json", timeout=5)
+                    if res.status_code == 200 and res.json():
+                        fcm_token = res.json().get("fcm_token")
+                except Exception as e:
+                    return Response({"error": f"Failed to fetch member from DB: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-
-
-
+        if not fcm_token:
+            return Response({"error": "Could not find an fcm_token for this user. They might need to register/login again to generate a new one."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            from Main.firebase_utils import send_push_notification
+            success, result = send_push_notification(fcm_token, title, body, url=url, icon_url=icon_url)
+            if success:
+                return Response({"message": "Notification sent successfully!", "message_id": result, "used_token": fcm_token}, status=status.HTTP_200_OK)
+            else:
+                return Response({"error": result, "used_token": fcm_token}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exception as e:
+            return Response({"error": str(e), "used_token": fcm_token}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

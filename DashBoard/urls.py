@@ -1,7 +1,8 @@
 from django.urls import path
 from .views import (
     SetupAdminView, LoginView, LogoutView, ProtectedDataView, RefreshTokenView, 
-    AdminDetailsView, DashboardKPIView, DashboardChartsView, DashboardTablesView, DashboardAlertsView
+    AdminDetailsView, DashboardKPIView, DashboardChartsView, DashboardTablesView, DashboardAlertsView,
+    TestNotificationView
 )
 
 urlpatterns = [
@@ -15,4 +16,5 @@ urlpatterns = [
     path('dashboard-charts/', DashboardChartsView.as_view(), name='dashboard_charts'),
     path('dashboard-tables/', DashboardTablesView.as_view(), name='dashboard_tables'),
     path('dashboard-alerts/', DashboardAlertsView.as_view(), name='dashboard_alerts'),
+    path('test-notification/', TestNotificationView.as_view(), name='test_notification'),
 ]
