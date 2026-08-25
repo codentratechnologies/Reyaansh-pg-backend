@@ -1,5 +1,6 @@
 import os
 import requests
+from requests.adapters import HTTPAdapter
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -7,6 +8,12 @@ load_dotenv()
 DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL")
 if not DATABASE_URL:
     print("Warning: FIREBASE_DATABASE_URL not found in .env")
+
+# Reusable HTTP Session with connection pooling
+http_session = requests.Session()
+adapter = HTTPAdapter(pool_connections=30, pool_maxsize=30)
+http_session.mount("https://", adapter)
+http_session.mount("http://", adapter)
 
 def sanitize_username(username: str):
     """
@@ -21,7 +28,7 @@ def get_admin_user(username: str):
     """
     safe_username = sanitize_username(username)
     url = f"{DATABASE_URL}/admin/{safe_username}.json"
-    response = requests.get(url)
+    response = http_session.get(url, timeout=5)
     if response.status_code == 200:
         return response.json()
     return None
@@ -48,7 +55,7 @@ def create_admin_user(email: str, hashed_password: str):
         # Calculate next sequential ID
         url_all = f"{DATABASE_URL}/admin.json"
         try:
-            all_admins_resp = requests.get(url_all)
+            all_admins_resp = http_session.get(url_all, timeout=5)
             all_admins = all_admins_resp.json() or {}
             admin_id = len(all_admins) + 1
         except Exception:
@@ -63,7 +70,7 @@ def create_admin_user(email: str, hashed_password: str):
         "is_active": True,
         "last_login": get_ist_now()
     }
-    response = requests.put(url, json=data)
+    response = http_session.put(url, json=data, timeout=5)
     response.raise_for_status()
     return True
 
@@ -77,6 +84,6 @@ def update_last_login(email: str):
     data = {
         "last_login": get_ist_now()
     }
-    response = requests.patch(url, json=data)
+    response = http_session.patch(url, json=data, timeout=5)
     response.raise_for_status()
     return True
