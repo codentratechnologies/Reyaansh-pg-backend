@@ -1074,48 +1074,449 @@ class DashboardAlertsView(APIView):
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-class TestNotificationView(APIView):
+from icalendar import Calendar, Event, vCalAddress, vText
+import uuid
+from django.core.mail import EmailMessage
+from django.conf import settings
+
+class SendCalendarReminderView(APIView):
     """
-    POST API to test sending push notifications.
+    POST API to send an ICS calendar reminder via email.
     Expected body:
     {
-        "member_id": "-O123456789",  // Will look up the token in the database
-        // OR "fcm_token": "token_string",
-        "title": "Hello",
-        "body": "Test message",
-        "url": "https://gossip-huntress-clambake.ngrok-free.dev/checkout"
+        "email": "user@example.com",
+        "title": "Rent Reminder",
+        "description": "Please pay your rent for this month.",
+        "start_time": "2026-09-01T10:00:00", // Optional
+        "end_time": "2026-09-01T11:00:00",   // Optional
+        "member_id": "-O123456789" // Optional
     }
     """
     def post(self, request):
-        fcm_token = request.data.get("fcm_token")
-        member_id = request.data.get("member_id")
-        title = request.data.get("title", "Test Title")
-        body = request.data.get("body", "Test Body")
-        url = request.data.get("url")
-        icon_url = request.data.get("icon_url")
+        email_arg = request.data.get("email")
+        member_id_arg = request.data.get("member_id")
+        title_arg = request.data.get("title", "Rent Reminder")
+        description_arg = request.data.get("description", "This is a reminder to pay your rent.")
+        checkout_url_arg = request.data.get("checkout_url")
         
-        # If no token is provided but member_id is, look it up in the DB!
-        if not fcm_token and member_id:
-            import os
-            import requests
-            DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL")
-            if DATABASE_URL:
-                try:
-                    res = http_session.get(f"{DATABASE_URL}/members/{member_id}.json", timeout=5)
-                    if res.status_code == 200 and res.json():
-                        fcm_token = res.json().get("fcm_token")
-                except Exception as e:
-                    return Response({"error": f"Failed to fetch member from DB: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        start_time_str_arg = request.data.get("start_time")
+        end_time_str_arg = request.data.get("end_time")
 
-        if not fcm_token:
-            return Response({"error": "Could not find an fcm_token for this user. They might need to register/login again to generate a new one."}, status=status.HTTP_400_BAD_REQUEST)
-            
+        if not email_arg and not member_id_arg:
+            return Response({"error": "Either email or member_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        import threading
+        import os
+        
+        def process_and_send(email, member_id, title, description, checkout_url, start_time_str, end_time_str):
+            rent_due_date_str = None
+            is_active = False
+
+            if member_id:
+                DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL")
+                if DATABASE_URL:
+                    try:
+                        res = http_session.get(f"{DATABASE_URL}/members/{member_id}.json", timeout=5)
+                        if res.status_code == 200 and res.json():
+                            member_data = res.json()
+                            if not email:
+                                email = member_data.get("email", member_data.get("email_id"))
+                            rent_due_date_str = str(member_data.get("rent_due_date", ""))
+                            status_val = str(member_data.get("status", "")).lower()
+                            is_active = (status_val == "active")
+                    except Exception as e:
+                        print(f"Background error: Failed to fetch member from DB: {str(e)}")
+                        return
+
+            if not email:
+                print("Background error: An email address is required to send the calendar invite.")
+                return
+
+            # Parse dates or use defaults
+            recurrence_day = None
+            try:
+                today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+                if start_time_str:
+                    start_time = datetime.fromisoformat(start_time_str)
+                elif rent_due_date_str and is_active:
+                    # Calculate start_time based on rent_due_date
+                    try:
+                        if len(rent_due_date_str) <= 2:
+                            day_num = int(rent_due_date_str)
+                            recurrence_day = day_num
+                        else:
+                            dt = datetime.fromisoformat(rent_due_date_str)
+                            recurrence_day = dt.day
+                            
+                        # Next occurrence
+                        due_dt = date(today.year, today.month, recurrence_day)
+                        if due_dt < today:
+                            month_val = today.month % 12 + 1
+                            year_val = today.year + (1 if today.month == 12 else 0)
+                            due_dt = date(year_val, month_val, recurrence_day)
+                        
+                        # Assume 11:30 PM IST on the due date
+                        start_time = datetime(due_dt.year, due_dt.month, due_dt.day, 23, 30, tzinfo=ZoneInfo("Asia/Kolkata"))
+                    except ValueError:
+                        start_time = datetime.now(ZoneInfo("Asia/Kolkata")) + timedelta(days=1)
+                else:
+                    start_time = datetime.now(ZoneInfo("Asia/Kolkata")) + timedelta(days=1)
+                    
+                if end_time_str:
+                    end_time = datetime.fromisoformat(end_time_str)
+                else:
+                    end_time = start_time + timedelta(hours=1)
+            except ValueError as e:
+                print(f"Background error: Invalid date format: {e}")
+                return
+
+            try:
+                # Use the actual sender email to avoid spam flags
+                sender_email = settings.EMAIL_HOST_USER
+
+                # Create the calendar event
+                cal = Calendar()
+                cal.add('prodid', f'-//PgAdmin Reminder System//{sender_email}//')
+                cal.add('version', '2.0')
+                cal.add('method', 'REQUEST') # Very important for calendar invites to show up properly
+
+                # Append checkout URL to calendar description
+                cal_description = description
+                if checkout_url:
+                    cal_description += f"\n\nPay online here: {checkout_url}"
+
+                event = Event()
+                event.add('summary', title)
+                event.add('dtstart', start_time)
+                event.add('dtend', end_time)
+                event.add('dtstamp', datetime.now(ZoneInfo("UTC")))
+                event.add('description', cal_description)
+                event['uid'] = f"{uuid.uuid4()}@{sender_email.split('@')[-1]}"
+                event.add('priority', 5)
+                event.add('status', 'CONFIRMED')
+
+                # Add recurrence rule if it's based on a rent due date and member is active
+                if recurrence_day and is_active:
+                    event.add('rrule', {'freq': 'monthly', 'bymonthday': recurrence_day})
+
+                # Add organizer and attendee using real emails
+                organizer = vCalAddress(f'MAILTO:{sender_email}')
+                organizer.params['cn'] = vText('PgAdmin')
+                event['organizer'] = organizer
+
+                attendee = vCalAddress(f'MAILTO:{email}')
+                attendee.params['cn'] = vText('Guest')
+                attendee.params['ROLE'] = vText('REQ-PARTICIPANT')
+                attendee.params['PARTSTAT'] = vText('NEEDS-ACTION')
+                attendee.params['RSVP'] = vText('TRUE')
+                event.add('attendee', attendee, encode=0)
+
+                cal.add_component(event)
+                ics_content = cal.to_ical()
+
+                # Create a more formal email body with checkout link
+                formal_body = f"Hello,\n\n{description}\n\n"
+                if checkout_url:
+                    formal_body += f"You can securely pay your rent online using the following link:\n{checkout_url}\n\n"
+                
+                formal_body += (
+                    f"We have attached a calendar invitation for your convenience. "
+                    f"Please add this event to your calendar.\n\n"
+                    f"Best regards,\n"
+                    f"PgAdmin Management"
+                )
+
+                # Send Email
+                email_msg = EmailMessage(
+                    subject=title,
+                    body=formal_body,
+                    from_email=sender_email, 
+                    to=[email],
+                )
+                
+                # Attach the .ics file
+                email_msg.attach('invite.ics', ics_content, 'text/calendar')
+                
+                # Send it
+                email_msg.send(fail_silently=False)
+                print(f"Background success: Calendar invite sent to {email}")
+
+            except Exception as e:
+                print(f"Background error: Failed to send calendar invite: {str(e)}")
+
+        # Start the background thread immediately
+        threading.Thread(
+            target=process_and_send, 
+            args=(email_arg, member_id_arg, title_arg, description_arg, checkout_url_arg, start_time_str_arg, end_time_str_arg)
+        ).start()
+
+        return Response({"message": "Calendar invite is being processed and sent in the background."}, status=status.HTTP_202_ACCEPTED)
+
+class SendRentReminderEmailView(APIView):
+    """
+    POST API to send a professional rent reminder email WITHOUT a calendar invite.
+    Expected body:
+    {
+        "member_id": "-O123456789",
+        "title": "Rent Payment Due",
+        "description": "This is a polite reminder that your rent is due.",
+        "checkout_url": "https://pgadmin-your-domain.com/checkout?id=123" // Optional
+    }
+    """
+    def post(self, request):
+        member_id_arg = request.data.get("member_id")
+        title_arg = request.data.get("title", "Rent Payment Due")
+        description_arg = request.data.get("description", "This is a polite reminder that your rent is due.")
+        checkout_url_arg = request.data.get("checkout_url")
+
+        if not member_id_arg:
+            return Response({"error": "member_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        import threading
+        import os
+
+        def process_and_send_email(member_id, title, description, checkout_url):
+            DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL")
+            if not DATABASE_URL:
+                print("Background error: FIREBASE_DATABASE_URL not set.")
+                return
+
+            try:
+                # 1. Fetch member data
+                res = http_session.get(f"{DATABASE_URL}/members/{member_id}.json", timeout=5)
+                if res.status_code != 200 or not res.json():
+                    print(f"Background error: Member {member_id} not found.")
+                    return
+                
+                member_data = res.json()
+                email = member_data.get("email", member_data.get("email_id"))
+                name = member_data.get("name", "Member")
+                rent_amt = member_data.get("monthly_rent", "0")
+                
+                if not email:
+                    print(f"Background error: No email found for member {member_id}.")
+                    return
+
+                # 2. Build a professional email body
+                body = f"Dear {name},\n\n"
+                body += f"{description}\n\n"
+                body += f"Monthly Rent Amount: ₹{rent_amt}\n\n"
+
+                if checkout_url:
+                    body += f"To make your payment securely online, please click the link below:\n{checkout_url}\n\n"
+                
+                body += "If you have already made the payment, please ignore this email.\n\n"
+                body += "Best regards,\nPgAdmin Management"
+
+                # 3. Send email
+                sender_email = settings.EMAIL_HOST_USER
+                email_msg = EmailMessage(
+                    subject=title,
+                    body=body,
+                    from_email=sender_email, 
+                    to=[email],
+                )
+                
+                email_msg.send(fail_silently=False)
+                print(f"Background success: Reminder email sent to {email}")
+
+            except Exception as e:
+                print(f"Background error: Failed to send reminder email: {str(e)}")
+
+        # Start the background thread
+        threading.Thread(
+            target=process_and_send_email, 
+            args=(member_id_arg, title_arg, description_arg, checkout_url_arg)
+        ).start()
+
+        return Response({"message": "Rent reminder email is being processed and sent in the background."}, status=status.HTTP_202_ACCEPTED)
+
+class TriggerDailyRemindersView(APIView):
+    """
+    GET or POST API to automatically sweep the database and send rent reminders to all members 
+    whose rent is due today. This endpoint is designed to be hit daily by a cron job.
+    """
+    def post(self, request):
+        return self._process_sweep()
+        
+    def get(self, request):
+        return self._process_sweep()
+        
+    def _process_sweep(self):
+        import threading
+        import os
+
+        def run_sweep_in_background():
+            DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL")
+            if not DATABASE_URL:
+                print("Bulk Sweep Error: FIREBASE_DATABASE_URL not set.")
+                return
+
+            try:
+                # 1. Fetch all members
+                res = http_session.get(f"{DATABASE_URL}/members.json", timeout=15)
+                if res.status_code != 200 or not res.json():
+                    print("Bulk Sweep: No members found in database.")
+                    return
+                
+                members_data = res.json()
+                today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+                emails_sent_count = 0
+                
+                # 2. Iterate through all members
+                for member_id, member in members_data.items():
+                    if not member:
+                        continue
+                        
+                    # Check active status
+                    status_val = str(member.get("status", "")).lower()
+                    if status_val != "active":
+                        continue
+                        
+                    email = member.get("email", member.get("email_id"))
+                    if not email:
+                        continue
+                        
+                    # 3. Check if rent is due today
+                    rent_due_date_str = str(member.get("rent_due_date", ""))
+                    if not rent_due_date_str:
+                        continue
+                        
+                    is_due_today = False
+                    if len(rent_due_date_str) <= 2:
+                        try:
+                            day_num = int(rent_due_date_str)
+                            if today.day == day_num:
+                                is_due_today = True
+                        except ValueError:
+                            pass
+                    else:
+                        try:
+                            dt = datetime.fromisoformat(rent_due_date_str).date()
+                            if dt.day == today.day:
+                                is_due_today = True
+                        except ValueError:
+                            pass
+                            
+                    if not is_due_today:
+                        continue
+                        
+                    # 4. Extract dynamic data
+                    name = member.get("name", "Member")
+                    pg_name = member.get("pg_name", "your PG")
+                    room_number = member.get("room_number", "your room")
+                    rent_amt = member.get("monthly_rent", "0")
+                    
+                    # 5. Construct Checkout URL
+                    checkout_url = f"https://reyaansh-pg.vercel.app/checkout?member_id={member_id}"
+                    
+                    # 6. Build highly personalized professional email
+                    subject = f"Action Required: Rent Payment Due Today - {pg_name}"
+                    
+                    body = f"Dear {name},\n\n"
+                    body += f"This is an automated reminder that your monthly rent for {pg_name} (Room {room_number}) is due today.\n\n"
+                    body += f"Monthly Rent Amount: ₹{rent_amt}\n\n"
+                    body += f"To make your payment securely online, please click your personal checkout link below:\n{checkout_url}\n\n"
+                    body += "If you have already made the payment today, please ignore this automated email.\n\n"
+                    body += "Best regards,\nPgAdmin Management"
+                    
+                    # 7. Send Email
+                    try:
+                        sender_email = settings.EMAIL_HOST_USER
+                        email_msg = EmailMessage(
+                            subject=subject,
+                            body=body,
+                            from_email=sender_email, 
+                            to=[email],
+                        )
+                        email_msg.send(fail_silently=False)
+                        emails_sent_count += 1
+                        print(f"Bulk Sweep: Sent reminder to {email} ({name})")
+                    except Exception as e:
+                        print(f"Bulk Sweep Error: Failed to send to {email} - {e}")
+                
+                print(f"Bulk Sweep Complete. Dispatched {emails_sent_count} reminders for today ({today.strftime('%Y-%m-%d')}).")
+
+            except Exception as e:
+                print(f"Bulk Sweep Error: {str(e)}")
+
+        # Start the sweep in a background thread so the pinging cron service doesn't timeout
+        threading.Thread(target=run_sweep_in_background).start()
+
+        return Response({
+            "message": "Automated sweep initiated in the background.", 
+            "status": "Running"
+        }, status=status.HTTP_202_ACCEPTED)
+
+class GeneratePaymentLinkView(APIView):
+    """
+    GET API to generate UPI payment deep links for a specific member.
+    The frontend can use these links to directly open GPay, PhonePe, or Paytm 
+    with the exact rent amount and payee pre-filled.
+    
+    Query Params:
+    - member_id: The ID of the member to fetch rent for.
+    """
+    def get(self, request):
+        import os
+        from urllib.parse import urlencode
+
+        member_id = request.query_params.get("member_id")
+        if not member_id:
+            return Response({"error": "member_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL")
+        if not DATABASE_URL:
+            return Response({"error": "FIREBASE_DATABASE_URL not set."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
         try:
-            from Main.firebase_utils import send_push_notification
-            success, result = send_push_notification(fcm_token, title, body, url=url, icon_url=icon_url)
-            if success:
-                return Response({"message": "Notification sent successfully!", "message_id": result, "used_token": fcm_token}, status=status.HTTP_200_OK)
-            else:
-                return Response({"error": result, "used_token": fcm_token}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            # Fetch member details to get their rent amount
+            res = http_session.get(f"{DATABASE_URL}/members/{member_id}.json", timeout=5)
+            if res.status_code != 200 or not res.json():
+                return Response({"error": "Member not found in database."}, status=status.HTTP_404_NOT_FOUND)
+            
+            member_data = res.json()
+            rent_amt_str = str(member_data.get("monthly_rent", "0"))
+            
+            try:
+                rent_amt = float(rent_amt_str)
+            except ValueError:
+                rent_amt = 0.0
+
+            if rent_amt <= 0:
+                return Response({"error": "Rent amount is zero or invalid."}, status=status.HTTP_400_BAD_REQUEST)
+
+            # --- UPI Configuration ---
+            # Using your provided mobile number (7359377502).
+            # Note: A real UPI ID (VPA) is usually required by most UPI apps (e.g. 7359377502@paytm).
+            upi_id = "7359377502@paytm" 
+            payee_name = "PgAdmin"
+            
+            # The core query parameters required for a UPI transaction
+            upi_params = {
+                "pa": upi_id,                # Payee Address (UPI ID)
+                "pn": payee_name,            # Payee Name
+                "am": f"{rent_amt:.2f}",     # Amount (e.g. 8000.00)
+                "cu": "INR",                 # Currency
+                "tn": f"Rent payment for {member_data.get('name', 'Member')}" # Transaction Note
+            }
+            
+            query_string = urlencode(upi_params)
+
+            # Different apps have different deep link prefixes
+            # The standard 'upi://pay' works on most mobile browsers to open the default UPI app chooser.
+            links = {
+                "generic_upi": f"upi://pay?{query_string}",
+                "google_pay": f"gpay://upi/pay?{query_string}",
+                "phonepe": f"phonepe://pay?{query_string}",
+                "paytm": f"paytmmp://pay?{query_string}",
+            }
+
+            return Response({
+                "member_name": member_data.get("name", "Unknown"),
+                "rent_amount": rent_amt,
+                "payment_links": links
+            }, status=status.HTTP_200_OK)
+
         except Exception as e:
-            return Response({"error": str(e), "used_token": fcm_token}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

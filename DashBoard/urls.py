@@ -2,7 +2,8 @@ from django.urls import path
 from .views import (
     SetupAdminView, LoginView, LogoutView, ProtectedDataView, RefreshTokenView, 
     AdminDetailsView, DashboardKPIView, DashboardChartsView, DashboardTablesView, DashboardAlertsView,
-    TestNotificationView, AdminProfileView
+    SendCalendarReminderView, AdminProfileView, SendRentReminderEmailView, TriggerDailyRemindersView,
+    GeneratePaymentLinkView
 )
 
 urlpatterns = [
@@ -17,5 +18,8 @@ urlpatterns = [
     path('dashboard-charts/', DashboardChartsView.as_view(), name='dashboard_charts'),
     path('dashboard-tables/', DashboardTablesView.as_view(), name='dashboard_tables'),
     path('dashboard-alerts/', DashboardAlertsView.as_view(), name='dashboard_alerts'),
-    path('test-notification/', TestNotificationView.as_view(), name='test_notification'),
+    path('send-calendar-reminder/', SendCalendarReminderView.as_view(), name='send_calendar_reminder'),
+    path('send-rent-email/', SendRentReminderEmailView.as_view(), name='send_rent_email'),
+    path('trigger-daily-reminders/', TriggerDailyRemindersView.as_view(), name='trigger_daily_reminders'),
+    path('generate-payment-link/', GeneratePaymentLinkView.as_view(), name='generate_payment_link'),
 ]
