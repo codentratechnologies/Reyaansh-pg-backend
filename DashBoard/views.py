@@ -231,16 +231,45 @@ class AdminDetailsView(APIView):
             if "password" in admin_data:
                 del admin_data["password"]
                 
+            # Ensure first_name and phone_number are present
+            admin_data.setdefault("name", "")
+            admin_data.setdefault("phone_number", "")
+                
             return Response(admin_data)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class AdminProfileView(APIView):
     """
-    API to update the currently logged in admin's profile data.
+    API to retrieve and update the currently logged in admin's profile data.
     Requires a valid JWT token.
     """
     authentication_classes = [JWTAuthentication]
+
+    def get(self, request):
+        if not isinstance(request.user, dict):
+            return Response({"detail": "User not authenticated"}, status=status.HTTP_401_UNAUTHORIZED)
+            
+        email = request.user.get("sub")
+        if not email:
+            return Response({"detail": "User not authenticated"}, status=status.HTTP_401_UNAUTHORIZED)
+            
+        try:
+            admin_data = get_admin_user(email)
+            if not admin_data:
+                return Response({"detail": "Admin not found"}, status=status.HTTP_404_NOT_FOUND)
+                
+            # Remove the password from the response for security
+            if "password" in admin_data:
+                del admin_data["password"]
+                
+            # Ensure first_name and phone_number are present
+            admin_data.setdefault("name", "")
+            admin_data.setdefault("phone_number", "")
+                
+            return Response(admin_data)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def put(self, request):
         if not isinstance(request.user, dict):
@@ -250,31 +279,32 @@ class AdminProfileView(APIView):
         if not email:
             return Response({"detail": "User not authenticated"}, status=status.HTTP_401_UNAUTHORIZED)
             
-        name = request.data.get("name")
-        last_name = request.data.get("last_name")
-        profile_email = request.data.get("email")
-        phone_number = request.data.get("phone_number")
-        location = request.data.get("location")
+        print("Received profile update data:", request.data)
         
-        # Only update fields that are provided
-        profile_data = {}
-        if name is not None:
-            profile_data["name"] = name
-        if last_name is not None:
-            profile_data["last_name"] = last_name
-        if profile_email is not None:
-            profile_data["email"] = profile_email
-        if phone_number is not None:
-            profile_data["phone_number"] = phone_number
-        if location is not None:
-            profile_data["location"] = location
-            
+        # Accept any fields sent by the frontend, excluding sensitive ones
+        restricted_fields = ["admin_id", "password", "last_login", "is_active"]
+        profile_data = {
+            key: value for key, value in request.data.items() 
+            if key not in restricted_fields and value is not None
+        }
+        
         if not profile_data:
-            return Response({"detail": "No profile data provided for update."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": f"No valid profile data provided for update. Received keys: {list(request.data.keys())}"}, status=status.HTTP_400_BAD_REQUEST)
             
         try:
             update_admin_profile(email, profile_data)
-            return Response({"message": "Profile updated successfully", "data": profile_data}, status=status.HTTP_200_OK)
+            
+            # Fetch the fully updated profile to return
+            updated_admin_data = get_admin_user(email)
+            if updated_admin_data and "password" in updated_admin_data:
+                del updated_admin_data["password"]
+                
+            # Ensure first_name and phone_number are present
+            if updated_admin_data:
+                updated_admin_data.setdefault("name", "")
+                updated_admin_data.setdefault("phone_number", "")
+            
+            return Response({"message": "Profile updated successfully", "data": updated_admin_data or profile_data}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -1503,6 +1533,24 @@ class GeneratePaymentLinkView(APIView):
             
             query_string = urlencode(upi_params)
 
+            # Fetch PG Info to resolve names
+            pg_id = member_data.get("pg_id", "")
+            room_id = member_data.get("room_id", "")
+            pg_name = pg_id
+            room_number = room_id
+            
+            if pg_id:
+                pg_res = http_session.get(f"{DATABASE_URL}/pg_properties/{pg_id}.json", timeout=5)
+                if pg_res.status_code == 200 and pg_res.json():
+                    pg_info = pg_res.json()
+                    pg_name = pg_info.get("property_name", pg_info.get("pg_name", pg_info.get("name", pg_id)))
+                    
+                    if room_id and "rooms" in pg_info and room_id in pg_info["rooms"]:
+                        room_info = pg_info["rooms"][room_id]
+                        room_number = room_info.get("room_number", room_info.get("room_name", room_info.get("name", room_id)))
+
+            member_name = member_data.get("full_name", member_data.get("name", "Unknown"))
+
             # Different apps have different deep link prefixes
             # The standard 'upi://pay' works on most mobile browsers to open the default UPI app chooser.
             links = {
@@ -1513,10 +1561,90 @@ class GeneratePaymentLinkView(APIView):
             }
 
             return Response({
-                "member_name": member_data.get("name", "Unknown"),
+                "member_name": member_name,
+                "pg_name": pg_name,
+                "room_number": room_number,
                 "rent_amount": rent_amt,
+                "due_date": member_data.get("rent_due_date", ""),
                 "payment_links": links
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+from .cloudinary_client import upload_image
+
+class SubmitPaymentProofView(APIView):
+    """
+    POST API to submit payment proof (screenshot) and transaction ID.
+    The frontend should extract the transaction ID (via OCR) and send it here
+    along with the image file.
+    
+    Expected Form Data:
+    - member_id (string)
+    - transaction_id (string)
+    - screenshot (file)
+    """
+    def post(self, request):
+        member_id = request.data.get("member_id")
+        transaction_id = request.data.get("transaction_id") or request.data.get("txn_id")
+        screenshot_file = request.FILES.get("screenshot") or request.FILES.get("file") or request.FILES.get("image") or request.FILES.get("proof_image")
+
+        print("--- PAYMENT PROOF DEBUG ---")
+        print("Data Keys Received:", list(request.data.keys()))
+        print("File Keys Received:", list(request.FILES.keys()))
+
+        missing = []
+        if not member_id: missing.append("member_id")
+        if not transaction_id: missing.append("transaction_id")
+        if not screenshot_file: missing.append("screenshot (must be a File upload)")
+
+        if missing:
+            return Response(
+                {"error": f"Missing required fields: {', '.join(missing)}"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL")
+        if not DATABASE_URL:
+            return Response({"error": "FIREBASE_DATABASE_URL not set."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # 1. Fetch member to get pg_id, name, rent amount
+        res = http_session.get(f"{DATABASE_URL}/members/{member_id}.json", timeout=5)
+        if res.status_code != 200 or not res.json():
+            return Response({"error": "Member not found."}, status=status.HTTP_404_NOT_FOUND)
+            
+        member_data = res.json()
+        pg_id = member_data.get("pg_id", "")
+        rent_amt = member_data.get("monthly_rent", 0)
+
+        # 2. Upload screenshot to Cloudinary
+        secure_url = upload_image(screenshot_file, folder="rent_proofs")
+        if not secure_url:
+            return Response({"error": "Failed to upload screenshot to Cloudinary."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # 3. Create rent record in Firebase
+        rent_record = {
+            "member_id": member_id,
+            "pg_id": pg_id,
+            "transaction_id": transaction_id,
+            "screenshot_url": secure_url,
+            "monthly_rent": rent_amt,
+            "status": "Under Review",
+            "created_at": datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(),
+            "updated_at": datetime.now(ZoneInfo("Asia/Kolkata")).isoformat()
+        }
+
+        # Update rent_records
+        patch_res = http_session.patch(f"{DATABASE_URL}/rent_records/{member_id}.json", json=rent_record, timeout=5)
+        if patch_res.status_code != 200:
+            return Response({"error": "Failed to save rent record to database."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # Also store in payments for historical records
+        http_session.post(f"{DATABASE_URL}/payments.json", json=rent_record, timeout=5)
+
+        return Response({
+            "message": "Payment proof submitted successfully.",
+            "record_id": member_id,
+            "screenshot_url": secure_url
+        }, status=status.HTTP_201_CREATED)

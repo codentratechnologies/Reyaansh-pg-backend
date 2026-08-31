@@ -43,7 +43,10 @@ Use this API on the Checkout page to generate ready-to-use "One-Click Pay" butto
 ```json
 {
     "member_name": "Rahul Sharma",
+    "pg_name": "Skyline PG",
+    "room_number": "101",
     "rent_amount": 8000.0,
+    "due_date": 26,
     "payment_links": {
         "generic_upi": "upi://pay?pa=7359377502@paytm&pn=PgAdmin&am=8000.00&cu=INR&tn=Rent+payment+for+Rahul+Sharma",
         "google_pay": "gpay://upi/pay?pa=7359377502@paytm&pn=PgAdmin&am=8000.00&cu=INR&tn=Rent+payment+for+Rahul+Sharma",
