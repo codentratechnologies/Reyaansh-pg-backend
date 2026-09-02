@@ -3,7 +3,7 @@ from .views import (
     SetupAdminView, LoginView, LogoutView, ProtectedDataView, RefreshTokenView, 
     AdminDetailsView, DashboardKPIView, DashboardChartsView, DashboardTablesView, DashboardAlertsView,
     SendCalendarReminderView, AdminProfileView, SendRentReminderEmailView, TriggerDailyRemindersView,
-    GeneratePaymentLinkView, SubmitPaymentProofView
+    GeneratePaymentLinkView, SubmitPaymentProofView, UploadPaymentStatementView
 )
 
 urlpatterns = [
@@ -23,4 +23,5 @@ urlpatterns = [
     path('trigger-daily-reminders/', TriggerDailyRemindersView.as_view(), name='trigger_daily_reminders'),
     path('generate-payment-link/', GeneratePaymentLinkView.as_view(), name='generate_payment_link'),
     path('submit-payment-proof/', SubmitPaymentProofView.as_view(), name='submit_payment_proof'),
+    path('upload-payment-statement/', UploadPaymentStatementView.as_view(), name='upload_payment_statement'),
 ]

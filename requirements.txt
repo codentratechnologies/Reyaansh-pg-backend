@@ -5,3 +5,4 @@ PyJWT>=2.8.0
 pywhatkit>=5.4.0
 icalendar>=5.0.0
 cloudinary>=1.41.0
+PyPDF2>=3.0.0

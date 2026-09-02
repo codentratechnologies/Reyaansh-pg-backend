@@ -1572,7 +1572,7 @@ class GeneratePaymentLinkView(APIView):
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-from .cloudinary_client import upload_image
+from .cloudinary_client import upload_image, upload_pdf
 
 class SubmitPaymentProofView(APIView):
     """
@@ -1648,3 +1648,93 @@ class SubmitPaymentProofView(APIView):
             "record_id": member_id,
             "screenshot_url": secure_url
         }, status=status.HTTP_201_CREATED)
+
+import PyPDF2
+
+class UploadPaymentStatementView(APIView):
+    """
+    POST API to upload a PDF statement (e.g. bank statement).
+    The PDF is stored in Cloudinary. The API extracts text from the PDF,
+    checks for matching transaction IDs from 'Under Review' rent records,
+    and updates their status to 'Paid' while attaching the statement URL.
+    
+    Expected Form Data:
+    - statement (file, PDF)
+    """
+    def post(self, request):
+        statement_file = request.FILES.get("statement") or request.FILES.get("file") or request.FILES.get("pdf")
+
+        if not statement_file:
+            return Response(
+                {"error": "Missing required field: statement (must be a PDF upload)"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL")
+        if not DATABASE_URL:
+            return Response({"error": "FIREBASE_DATABASE_URL not set."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # 1. Extract text from PDF
+        pdf_text = ""
+        try:
+            pdf_reader = PyPDF2.PdfReader(statement_file)
+            for page in pdf_reader.pages:
+                text = page.extract_text()
+                if text:
+                    pdf_text += text + "\n"
+            # Reset file pointer for Cloudinary upload
+            statement_file.seek(0)
+        except Exception as e:
+            return Response({"error": f"Failed to parse PDF: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 2. Upload PDF to Cloudinary
+        secure_url = upload_pdf(statement_file, folder="payment_statements")
+        if not secure_url:
+            return Response({"error": "Failed to upload statement to Cloudinary."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # 3. Fetch all rent records and payments from Firebase
+        urls = {
+            "rent_records": f"{DATABASE_URL}/rent_records.json",
+            "payments": f"{DATABASE_URL}/payments.json"
+        }
+        nodes = fetch_nodes_parallel(urls)
+        rent_records = nodes.get("rent_records") or {}
+        payments = nodes.get("payments") or {}
+
+        matched_members = []
+        updated_records = 0
+
+        current_time = datetime.now(ZoneInfo("Asia/Kolkata")).isoformat()
+
+        # 4. Check for matching transaction IDs and update
+        for member_id, record in rent_records.items():
+            txn_id = record.get("transaction_id")
+            # We match if the txn_id is present in the statement
+            # It's better to verify records that are not already Paid, but we can do it for any valid txn_id
+            if txn_id and str(txn_id) in pdf_text:
+                if record.get("status") != "Paid":
+                    # Update rent_record
+                    update_data = {
+                        "status": "Paid",
+                        "statement_url": secure_url,
+                        "statement_uploaded_at": current_time,
+                        "updated_at": current_time
+                    }
+                    patch_res = http_session.patch(f"{DATABASE_URL}/rent_records/{member_id}.json", json=update_data, timeout=5)
+                    
+                    if patch_res.status_code == 200:
+                        matched_members.append(member_id)
+                        updated_records += 1
+
+                    # Update corresponding payment in payments node
+                    for p_key, p_val in payments.items():
+                        if p_val.get("member_id") == member_id and p_val.get("transaction_id") == txn_id:
+                            http_session.patch(f"{DATABASE_URL}/payments/{p_key}.json", json=update_data, timeout=5)
+
+        return Response({
+            "message": "Payment statement processed successfully.",
+            "statement_url": secure_url,
+            "matched_members": matched_members,
+            "updated_records": updated_records
+        }, status=status.HTTP_201_CREATED)
+
