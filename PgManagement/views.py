@@ -65,7 +65,7 @@ class AddPgPropertyView(APIView):
         # Auto-generate PG ID/Code (Sequential PG001, PG002, etc.)
         try:
             get_url = f"{DATABASE_URL}/pg_properties.json?shallow=true"
-            response = requests.get(get_url)
+            response = http_session.get(get_url)
             response.raise_for_status()
             existing_pgs = response.json()
             
@@ -192,7 +192,7 @@ class AddPgPropertyView(APIView):
         
         try:
             # Using PUT to write at the specific node id
-            response = requests.put(url, json=payload)
+            response = http_session.put(url, json=payload)
             response.raise_for_status()
         except requests.exceptions.RequestException as e:
             return Response(
@@ -261,7 +261,7 @@ class AddPgPropertyView(APIView):
             pg_type = str(data.get("pg_type", payload.get("pg_type", "")))
             if not pg_type:
                 try:
-                    res = requests.get(f"{DATABASE_URL}/pg_properties/{pg_id}/pg_type.json")
+                    res = http_session.get(f"{DATABASE_URL}/pg_properties/{pg_id}/pg_type.json")
                     if res.status_code == 200 and res.json():
                         pg_type = res.json()
                 except:
@@ -333,7 +333,7 @@ class AddPgPropertyView(APIView):
         url = f"{DATABASE_URL}/pg_properties/{pg_id}.json"
         
         try:
-            response = requests.patch(url, json=payload)
+            response = http_session.patch(url, json=payload)
             response.raise_for_status()
         except requests.exceptions.RequestException as e:
             return Response(
@@ -360,7 +360,7 @@ class AddPgPropertyView(APIView):
         if pg_id:
             url = f"{DATABASE_URL}/pg_properties/{pg_id}.json"
             try:
-                response = requests.get(url)
+                response = http_session.get(url)
                 response.raise_for_status()
                 data = response.json()
                 
@@ -381,7 +381,7 @@ class AddPgPropertyView(APIView):
         url = f"{DATABASE_URL}/pg_properties.json"
         
         try:
-            response = requests.get(url)
+            response = http_session.get(url)
             response.raise_for_status()
             data = response.json()
             
@@ -501,13 +501,13 @@ class AddPgPropertyView(APIView):
         
         try:
             # First, check if it exists
-            check_response = requests.get(url)
+            check_response = http_session.get(url)
             check_response.raise_for_status()
             if not check_response.json():
                 return Response({"detail": "PG property not found."}, status=status.HTTP_404_NOT_FOUND)
 
             # Proceed to soft delete (change status to inactive)
-            response = requests.patch(url, json={"property_status": False})
+            response = http_session.patch(url, json={"property_status": False})
             response.raise_for_status()
         except requests.exceptions.RequestException as e:
             return Response(
@@ -534,7 +534,7 @@ class GetStatesView(APIView):
         url = f"{DATABASE_URL}/pg_properties.json"
         
         try:
-            response = requests.get(url)
+            response = http_session.get(url)
             response.raise_for_status()
             data = response.json()
             
@@ -578,7 +578,7 @@ class GetCitiesView(APIView):
         url = f"{DATABASE_URL}/pg_properties.json"
         
         try:
-            response = requests.get(url)
+            response = http_session.get(url)
             response.raise_for_status()
             data = response.json()
             

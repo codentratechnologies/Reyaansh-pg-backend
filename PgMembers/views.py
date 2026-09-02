@@ -292,7 +292,7 @@ class MemberView(APIView):
         if pg_type == 'PG':
             bed_url = f"{DATABASE_URL}/pg_properties/{pg_id}/rooms/{room_id}/beds/{bed_id}.json"
             try:
-                bed_res = requests.get(bed_url)
+                bed_res = http_session.get(bed_url)
                 bed_res.raise_for_status()
                 bed_data = bed_res.json()
                 
@@ -382,7 +382,7 @@ class MemberView(APIView):
         # 4. Generate Proper Member ID (MEM001, MEM002, etc.)
         try:
             get_url = f"{DATABASE_URL}/members.json?shallow=true"
-            response = requests.get(get_url)
+            response = http_session.get(get_url)
             response.raise_for_status()
             existing_members = response.json()
             
@@ -410,7 +410,7 @@ class MemberView(APIView):
         # 5. Save to Firebase Members Node
         member_url = f"{DATABASE_URL}/members/{member_id}.json"
         try:
-            member_res = requests.put(member_url, json=payload)
+            member_res = http_session.put(member_url, json=payload)
             member_res.raise_for_status()
         except requests.exceptions.RequestException as e:
             return Response(
@@ -426,7 +426,7 @@ class MemberView(APIView):
                     "is_occupied": True,
                     "member_id": member_id
                 }
-                requests.patch(bed_url, json=bed_patch)
+                http_session.patch(bed_url, json=bed_patch)
             except requests.exceptions.RequestException as e:
                 # Note: This means member was created, but bed wasn't updated. 
                 # A manual rollback or retry logic might be needed in a robust system.
@@ -448,7 +448,7 @@ class MemberView(APIView):
             "created_at": payload["created_at"]
         }
         try:
-            requests.put(rent_record_url, json=rent_payload)
+            http_session.put(rent_record_url, json=rent_payload)
         except requests.exceptions.RequestException as e:
             # We silently ignore rent record creation failure or just log it.
             pass
@@ -487,7 +487,7 @@ class MemberView(APIView):
         # 1. Fetch existing member
         member_url = f"{DATABASE_URL}/members/{member_id}.json"
         try:
-            member_res = requests.get(member_url)
+            member_res = http_session.get(member_url)
             member_res.raise_for_status()
             existing_member = member_res.json()
             
@@ -532,7 +532,7 @@ class MemberView(APIView):
             if new_bed_id:
                 new_bed_url = f"{DATABASE_URL}/pg_properties/{new_pg_id}/rooms/{new_room_id}/beds/{new_bed_id}.json"
                 try:
-                    new_bed_res = requests.get(new_bed_url)
+                    new_bed_res = http_session.get(new_bed_url)
                     new_bed_res.raise_for_status()
                     new_bed_data = new_bed_res.json()
                     
@@ -549,7 +549,7 @@ class MemberView(APIView):
 
         # 3. Save to Firebase Members Node
         try:
-            update_res = requests.put(member_url, json=update_data)
+            update_res = http_session.put(member_url, json=update_data)
             update_res.raise_for_status()
         except requests.exceptions.RequestException as e:
             return Response(
@@ -563,14 +563,14 @@ class MemberView(APIView):
             if old_pg_type == 'PG' and old_pg_id and old_room_id and old_bed_id:
                 old_bed_url = f"{DATABASE_URL}/pg_properties/{old_pg_id}/rooms/{old_room_id}/beds/{old_bed_id}.json"
                 try:
-                    requests.patch(old_bed_url, json={"is_occupied": False, "member_id": None})
+                    http_session.patch(old_bed_url, json={"is_occupied": False, "member_id": None})
                 except:
                     pass
             
             # Occupy new bed
             if new_pg_type == 'PG' and new_pg_id and new_room_id and new_bed_id:
                 try:
-                    requests.patch(new_bed_url, json={"is_occupied": True, "member_id": member_id})
+                    http_session.patch(new_bed_url, json={"is_occupied": True, "member_id": member_id})
                 except:
                     pass
 
@@ -579,14 +579,14 @@ class MemberView(APIView):
         if any(key in data for key in rent_fields):
             rent_record_url = f"{DATABASE_URL}/rent_records/{member_id}.json"
             try:
-                rent_res = requests.get(rent_record_url)
+                rent_res = http_session.get(rent_record_url)
                 if rent_res.status_code == 200 and rent_res.json():
                     rent_payload = rent_res.json()
                     for field in rent_fields:
                         if field in update_data:
                             rent_payload[field] = update_data[field]
                     
-                    requests.put(rent_record_url, json=rent_payload)
+                    http_session.put(rent_record_url, json=rent_payload)
             except:
                 pass
 
@@ -614,7 +614,7 @@ class MemberView(APIView):
         # 1. Fetch existing member
         member_url = f"{DATABASE_URL}/members/{member_id}.json"
         try:
-            member_res = requests.get(member_url)
+            member_res = http_session.get(member_url)
             member_res.raise_for_status()
             existing_member = member_res.json()
             
@@ -638,14 +638,14 @@ class MemberView(APIView):
         if pg_type == 'PG' and pg_id and room_id and bed_id:
             bed_url = f"{DATABASE_URL}/pg_properties/{pg_id}/rooms/{room_id}/beds/{bed_id}.json"
             try:
-                requests.patch(bed_url, json={"is_occupied": False, "member_id": None})
+                http_session.patch(bed_url, json={"is_occupied": False, "member_id": None})
             except:
                 pass # Silently ignore bed update failure for now
 
         # 3. Delete rent record
         rent_record_url = f"{DATABASE_URL}/rent_records/{member_id}.json"
         try:
-            requests.delete(rent_record_url)
+            http_session.delete(rent_record_url)
         except:
             pass
 
@@ -656,7 +656,7 @@ class MemberView(APIView):
                 "status": "Deleted",
                 "updated_at": get_ist_now()
             }
-            delete_res = requests.patch(member_url, json=patch_data)
+            delete_res = http_session.patch(member_url, json=patch_data)
             delete_res.raise_for_status()
         except requests.exceptions.RequestException as e:
             return Response(
