@@ -808,18 +808,90 @@ class PgAvailabilityView(APIView):
                     "total_beds": total_beds,
                     "occupied_beds": occupied_beds,
                     "available_beds": available_beds_count,
-                    "available_rooms": available_rooms
+                    "images": pg.get("images", [])
                 })
 
             return Response({
                 "message": "Available PGs fetched successfully",
-                "total_active_pgs": len(availability_list),
+                "total_records": len(availability_list),
                 "data": availability_list
             }, status=status.HTTP_200_OK)
 
         except requests.exceptions.RequestException as e:
             return Response(
-                {"detail": f"Failed to fetch availability from Firebase: {str(e)}"},
+                {"detail": f"Failed to fetch PG availability: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+class VerifyCheckPaymentView(APIView):
+    """
+    POST API to verify payment by check.
+    Updates the rent_records node for the member to set status = 'paid'.
+    """
+    def post(self, request):
+        member_id = request.data.get("member_id")
+        check_number = request.data.get("check_number", "")
+        amount = request.data.get("amount")
+        
+        if not member_id:
+            return Response({"detail": "member_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        if not DATABASE_URL:
+            return Response(
+                {"detail": "Firebase database URL is not configured."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+            
+        rent_record_url = f"{DATABASE_URL}/rent_records/{member_id}.json"
+        
+        try:
+            # 1. Fetch existing rent record
+            rent_res = http_session.get(rent_record_url)
+            rent_data = rent_res.json()
+            
+            if not rent_data:
+                 return Response({"detail": "Rent record not found for this member."}, status=status.HTTP_404_NOT_FOUND)
+                 
+            # 2. Update rent status
+            patch_data = {
+                "status": "paid",
+                "payment_method": "check",
+                "updated_at": get_ist_now()
+            }
+            if check_number:
+                patch_data["check_number"] = str(check_number)
+            if amount is not None:
+                patch_data["amount_paid"] = amount
+                
+            update_res = http_session.patch(rent_record_url, json=patch_data)
+            update_res.raise_for_status()
+            
+            # 3. Add to payments node for dashboard history
+            try:
+                payment_id = f"PAY_{int(datetime.now().timestamp())}_{member_id}"
+                payment_url = f"{DATABASE_URL}/payments/{payment_id}.json"
+                payment_data = {
+                    "payment_id": payment_id,
+                    "member_id": member_id,
+                    "pg_id": rent_data.get("pg_id", ""),
+                    "amount": amount if amount is not None else rent_data.get("monthly_rent", 0),
+                    "payment_method": "check",
+                    "check_number": str(check_number),
+                    "status": "paid",
+                    "created_at": get_ist_now()
+                }
+                http_session.put(payment_url, json=payment_data)
+            except Exception as e:
+                pass # Non-critical if it fails to log history
+                
+            return Response({
+                "message": "Payment verified by check successfully.", 
+                "member_id": member_id,
+                "status": "paid"
+            }, status=status.HTTP_200_OK)
+            
+        except requests.exceptions.RequestException as e:
+            return Response(
+                {"detail": f"Failed to verify payment: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

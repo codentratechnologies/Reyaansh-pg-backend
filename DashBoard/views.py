@@ -488,7 +488,13 @@ class DashboardKPIView(APIView):
                                 total_beds += len(beds)
                                 for b_id, b_info in beds.items():
                                     if isinstance(b_info, dict) and b_info.get("is_occupied"):
-                                        occupied_beds += 1
+                                        mem_id = b_info.get("member_id")
+                                        if mem_id and mem_id in members_data:
+                                            mem = members_data[mem_id]
+                                            if not mem.get("is_deleted") and mem.get("status") not in ["Inactive", "Deleted"]:
+                                                occupied_beds += 1
+                                        elif not mem_id:
+                                            occupied_beds += 1
 
             total_members = 0
             active_members = 0
@@ -510,8 +516,7 @@ class DashboardKPIView(APIView):
                     continue
 
                 m_dt = m_info.get("created_at") or m_info.get("joining_date")
-                if not match_date_filter(m_dt, filters):
-                    continue
+                # Removed date filter for snapshot metric (Total Members) so it matches absolute occupied beds
 
                 total_members += 1
                 if m_status == "Active":
@@ -647,7 +652,13 @@ class DashboardChartsView(APIView):
                                 total_beds += len(beds)
                                 for b_id, b_info in beds.items():
                                     if isinstance(b_info, dict) and b_info.get("is_occupied"):
-                                        occupied_beds += 1
+                                        mem_id = b_info.get("member_id")
+                                        if mem_id and mem_id in members_data:
+                                            mem = members_data[mem_id]
+                                            if not mem.get("is_deleted") and mem.get("status") not in ["Inactive", "Deleted"]:
+                                                occupied_beds += 1
+                                        elif not mem_id:
+                                            occupied_beds += 1
 
             vacant_beds = max(0, total_beds - occupied_beds)
 
@@ -686,8 +697,7 @@ class DashboardChartsView(APIView):
                     continue
 
                 created_at = m_info.get("created_at") or m_info.get("joining_date", "")
-                if not match_date_filter(created_at, filters):
-                    continue
+                # Removed date filter for snapshot metrics so member distribution is accurate
 
                 is_deleted = m_info.get("is_deleted")
                 rent_val = 0
