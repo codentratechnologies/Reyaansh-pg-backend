@@ -8,6 +8,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
+from django.core.cache import cache
 
 from .security import hash_password, create_token, JWTAuthentication, verify_token
 from .firebase_client import get_admin_user, create_admin_user, update_last_login, update_admin_profile
@@ -27,10 +28,20 @@ def fetch_nodes_parallel(url_dict):
     """
     def fetch_one(item):
         key, url = item
+        
+        # Check cache first
+        cache_key = f"firebase_{url}"
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return key, cached_data
+            
         try:
-            res = http_session.get(url, timeout=5)
+            res = http_session.get(url, timeout=10)
             if res.status_code == 200 and res.json():
-                return key, res.json()
+                data = res.json()
+                # Cache for 30 seconds
+                cache.set(cache_key, data, timeout=30)
+                return key, data
         except Exception:
             pass
         return key, {}

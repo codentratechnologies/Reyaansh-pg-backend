@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
+from django.core.cache import cache
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -26,10 +27,20 @@ def fetch_nodes_parallel(url_dict):
     """
     def fetch_one(item):
         key, url = item
+        
+        # Check cache first
+        cache_key = f"firebase_{url}"
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return key, cached_data
+            
         try:
-            res = http_session.get(url, timeout=5)
+            res = http_session.get(url, timeout=10)
             if res.status_code == 200 and res.json():
-                return key, res.json()
+                data = res.json()
+                # Cache for 30 seconds
+                cache.set(cache_key, data, timeout=30)
+                return key, data
         except Exception:
             pass
         return key, {}
@@ -58,11 +69,15 @@ class MemberView(APIView):
         member_id = request.query_params.get("member_id") or request.query_params.get("id")
         
         try:
-            # Parallel fetch of rent records and pg properties
-            nodes = fetch_nodes_parallel({
+            fetch_dict = {
                 "rent": f"{DATABASE_URL}/rent_records.json",
                 "pgs": f"{DATABASE_URL}/pg_properties.json"
-            })
+            }
+            if not member_id:
+                fetch_dict["members"] = f"{DATABASE_URL}/members.json"
+
+            # Parallel fetch
+            nodes = fetch_nodes_parallel(fetch_dict)
             rent_records = nodes["rent"]
             pg_properties = nodes["pgs"]
 
@@ -120,10 +135,7 @@ class MemberView(APIView):
             joining_date_param = request.query_params.get("joining_date") or request.query_params.get("created_at") or request.headers.get("joining_date")
 
             # --- ALL MEMBERS (PAGINATED & FILTERED) ---
-            url = f"{DATABASE_URL}/members.json"
-            res = http_session.get(url)
-            res.raise_for_status()
-            members_dict = res.json() or {}
+            members_dict = nodes.get("members", {})
 
             formatted_members = []
 
@@ -456,6 +468,27 @@ class MemberView(APIView):
         # Append member_id to response payload
         payload["member_id"] = member_id
         
+        # 7. Auto-send Calendar Reminder if email is provided
+        email = payload.get("email")
+        if email:
+            try:
+                from DashBoard.views import SendCalendarReminderView
+                class MockRequest:
+                    def __init__(self, data):
+                        self.data = data
+                
+                mock_req = MockRequest({
+                    "email": email,
+                    "member_id": member_id,
+                    "title": "Welcome! Monthly Rent Reminder",
+                    "description": "Welcome to the PG! This is an automated calendar reminder for your monthly rent payment."
+                })
+                # Trigger the background thread in the calendar view
+                SendCalendarReminderView().post(mock_req)
+            except Exception as e:
+                print(f"Failed to auto-send calendar reminder: {e}")
+                
+
         return Response({
             "message": "Member created successfully",
             "member_id": member_id,
