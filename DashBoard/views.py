@@ -172,9 +172,11 @@ class RefreshTokenView(APIView):
         if not refresh_token:
             return Response({"detail": "Refresh token missing"}, status=status.HTTP_401_UNAUTHORIZED)
             
-        payload = verify_token(refresh_token)
-        if not payload or payload.get("type") != "refresh":
-            return Response({"detail": "Invalid or expired refresh token"}, status=status.HTTP_401_UNAUTHORIZED)
+        payload, error = verify_token(refresh_token)
+        if error == "expired":
+            return Response({"detail": "Refresh token expired", "code": "token_expired"}, status=status.HTTP_401_UNAUTHORIZED)
+        if error == "invalid" or not payload or payload.get("type") != "refresh":
+            return Response({"detail": "Invalid refresh token", "code": "token_not_valid"}, status=status.HTTP_401_UNAUTHORIZED)
             
         username = payload.get("sub")
         
