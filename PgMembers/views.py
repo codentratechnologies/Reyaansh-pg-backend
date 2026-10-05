@@ -10,6 +10,7 @@ from django.core.cache import cache
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from DashBoard.cloudinary_client import upload_image_full
 
 
 load_dotenv()
@@ -20,6 +21,40 @@ http_session = requests.Session()
 adapter = HTTPAdapter(pool_connections=30, pool_maxsize=30)
 http_session.mount("https://", adapter)
 http_session.mount("http://", adapter)
+
+def process_cloudinary_image(raw_val, folder="members"):
+    """
+    Uploads an image file object, base64 string, or remote image URL to Cloudinary.
+    Returns tuple of (cloudinary_public_id, cloudinary_secure_url).
+    """
+    if not raw_val:
+        return None, None
+    try:
+        # Check if it's an uploaded file object or base64 data string
+        if hasattr(raw_val, 'read') or hasattr(raw_val, 'chunks') or (isinstance(raw_val, str) and (raw_val.startswith("data:image/") or len(raw_val) > 500)):
+            res = upload_image_full(raw_val, folder=folder)
+            if res and res.get("public_id"):
+                return res["public_id"], res["secure_url"]
+            return None, None
+        elif isinstance(raw_val, str):
+            val_str = raw_val.strip()
+            if not val_str:
+                return None, None
+            if val_str.startswith("http://") or val_str.startswith("https://"):
+                # Upload remote image to Cloudinary to generate a Cloudinary public_id
+                res = upload_image_full(val_str, folder=folder)
+                if res and res.get("public_id"):
+                    return res["public_id"], res["secure_url"]
+                return val_str, val_str
+            else:
+                # It is already a Cloudinary public_id
+                cloud_name = os.getenv("CLOUDINARY_CLOUD_NAME", "")
+                secure_url = f"https://res.cloudinary.com/{cloud_name}/image/upload/{val_str}" if cloud_name else val_str
+                return val_str, secure_url
+    except Exception as e:
+        print(f"Cloudinary image processing error: {e}")
+        return None, None
+    return None, None
 
 def fetch_nodes_parallel(url_dict):
     """
@@ -260,12 +295,24 @@ class MemberView(APIView):
 
     def post(self, request):
         data = request.data
+        files = request.FILES
 
         if not DATABASE_URL:
             return Response(
                 {"detail": "Firebase database URL is not configured."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+        # Extract mandatory images (member_img and aadhaar_card_img) from request FILES or data
+        member_img_raw = (
+            files.get("member_img") or files.get("member_image") or files.get("profile_img") or files.get("profile_image") or files.get("member_photo") or
+            data.get("member_img") or data.get("member_image") or data.get("profile_img") or data.get("profile_image") or data.get("member_photo")
+        )
+
+        aadhaar_img_raw = (
+            files.get("aadhaar_card_img") or files.get("aadhaar_img") or files.get("aadhaar_card_image") or files.get("aadhaar_card") or files.get("aadhar_card_img") or files.get("aadhar_img") or
+            data.get("aadhaar_card_img") or data.get("aadhaar_img") or data.get("aadhaar_card_image") or data.get("aadhaar_card") or data.get("aadhar_card_img") or data.get("aadhar_img")
+        )
 
         # 1. Validate Required Fields
         required_fields = [
@@ -280,6 +327,11 @@ class MemberView(APIView):
         
         missing_fields = [field for field in required_fields if data.get(field) in [None, ""]]
         
+        if not member_img_raw:
+            missing_fields.append("member_img")
+        if not aadhaar_img_raw:
+            missing_fields.append("aadhaar_card_img")
+
         pg_type = str(data.get("pg_type", ""))
         status_val = str(data.get("status", ""))
         
@@ -293,6 +345,21 @@ class MemberView(APIView):
         if missing_fields:
             return Response(
                 {"detail": f"Missing required fields: {', '.join(missing_fields)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Upload mandatory images to Cloudinary
+        member_img_id, member_img_url = process_cloudinary_image(member_img_raw, folder="members/profile_images")
+        if not member_img_id:
+            return Response(
+                {"detail": "Failed to upload member_img to Cloudinary. Please provide a valid image file, base64 string, or Cloudinary ID."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        aadhaar_img_id, aadhaar_img_url = process_cloudinary_image(aadhaar_img_raw, folder="members/aadhaar_cards")
+        if not aadhaar_img_id:
+            return Response(
+                {"detail": "Failed to upload aadhaar_card_img to Cloudinary. Please provide a valid image file, base64 string, or Cloudinary ID."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -330,8 +397,14 @@ class MemberView(APIView):
             "gender": str(data.get("gender")),
             "company_college_name": str(data.get("company_college_name")),
             
-            # Identity Verification
+            # Identity Verification & Images (Stored in Cloudinary, Cloudinary ID stored in Firebase)
             "aadhaar_number": str(data.get("aadhaar_number")),
+            "member_img": member_img_id,
+            "member_img_id": member_img_id,
+            "member_img_url": member_img_url,
+            "aadhaar_card_img": aadhaar_img_id,
+            "aadhaar_card_img_id": aadhaar_img_id,
+            "aadhaar_card_img_url": aadhaar_img_url,
             
             # Emergency Contact
             "emergency_contact_name": str(data.get("emergency_contact_name")),
@@ -349,6 +422,7 @@ class MemberView(APIView):
             "pg_type": pg_type,
             "pg_id": pg_id,
             "room_id": room_id,
+            "bed_id": bed_id,
             
             # Rent Details
             "monthly_rent": int(data.get("monthly_rent")),
@@ -369,6 +443,12 @@ class MemberView(APIView):
         if "alternate_mobile_number" in data and data.get("alternate_mobile_number"):
             payload["alternate_mobile_number"] = str(data.get("alternate_mobile_number"))
         if "email" in data and data.get("email"):
+            payload["email"] = str(data.get("email"))
+        elif "email_id" in data and data.get("email_id"):
+            payload["email"] = str(data.get("email_id"))
+        elif "emailId" in data and data.get("emailId"):
+            payload["email"] = str(data.get("emailId"))
+        if False:
             payload["email"] = str(data.get("email"))
         if "pan_number" in data and data.get("pan_number"):
             payload["pan_number"] = str(data.get("pan_number"))
@@ -446,6 +526,19 @@ class MemberView(APIView):
                     {"detail": f"Member created, but failed to update bed status: {str(e)}"},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
+        elif pg_type in ['Apartment', 'Flat'] and pg_id and room_id:
+            room_url = f"{DATABASE_URL}/pg_properties/{pg_id}/rooms/{room_id}.json"
+            try:
+                room_patch = {
+                    "is_occupied": True,
+                    "member_id": member_id
+                }
+                http_session.patch(room_url, json=room_patch)
+            except requests.exceptions.RequestException as e:
+                return Response(
+                    {"detail": f"Member created, but failed to update room status: {str(e)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
 
         # 6. Create Rent Record automatically (as mentioned: "Referenced in the rent_records node via member_id")
         rent_record_url = f"{DATABASE_URL}/rent_records/{member_id}.json"
@@ -468,25 +561,34 @@ class MemberView(APIView):
         # Append member_id to response payload
         payload["member_id"] = member_id
         
-        # 7. Auto-send Calendar Reminder if email is provided
+        # 7. Auto-send Calendar Reminder ONLY to the newly added member if email is provided
+        # Support optional send_email / send_welcome_email flag (defaults to True)
+        send_email_option = data.get("send_email", data.get("send_welcome_email", data.get("sendEmail", True)))
+        if isinstance(send_email_option, str):
+            should_send_email = send_email_option.lower() not in ("false", "0", "no")
+        else:
+            should_send_email = bool(send_email_option)
+
         email = payload.get("email")
-        if email:
+        if email and should_send_email:
             try:
                 from DashBoard.views import SendCalendarReminderView
                 class MockRequest:
-                    def __init__(self, data):
-                        self.data = data
+                    def __init__(self, req_data):
+                        self.data = req_data
                 
+                full_name = payload.get("full_name", "Member")
                 mock_req = MockRequest({
                     "email": email,
                     "member_id": member_id,
                     "title": "Welcome! Monthly Rent Reminder",
-                    "description": "Welcome to the PG! This is an automated calendar reminder for your monthly rent payment."
+                    "description": f"Welcome {full_name} to the PG! This is an automated calendar reminder for your monthly rent payment."
                 })
-                # Trigger the background thread in the calendar view
+                # Trigger background thread in calendar view ONLY for this specific new member
                 SendCalendarReminderView().post(mock_req)
+                print(f"Triggered welcome reminder email ONLY for new member {member_id} ({email})")
             except Exception as e:
-                print(f"Failed to auto-send calendar reminder: {e}")
+                print(f"Failed to auto-send calendar reminder to new member {member_id}: {e}")
                 
 
         return Response({
@@ -543,6 +645,7 @@ class MemberView(APIView):
 
         # 2. Update fields
         update_data = existing_member.copy()
+        files = request.FILES
         
         for key, value in data.items():
             if key not in ["member_id", "created_at"] and value is not None and str(value).strip() != "":
@@ -551,6 +654,31 @@ class MemberView(APIView):
                 else:
                     update_data[key] = str(value)
                     
+        # Process image updates if provided
+        member_img_raw = (
+            files.get("member_img") or files.get("member_image") or files.get("profile_img") or files.get("profile_image") or files.get("member_photo") or
+            data.get("member_img") or data.get("member_image") or data.get("profile_img") or data.get("profile_image") or data.get("member_photo")
+        )
+
+        aadhaar_img_raw = (
+            files.get("aadhaar_card_img") or files.get("aadhaar_img") or files.get("aadhaar_card_image") or files.get("aadhaar_card") or files.get("aadhar_card_img") or files.get("aadhar_img") or
+            data.get("aadhaar_card_img") or data.get("aadhaar_img") or data.get("aadhaar_card_image") or data.get("aadhaar_card") or data.get("aadhar_card_img") or data.get("aadhar_img")
+        )
+
+        if member_img_raw:
+            m_id, m_url = process_cloudinary_image(member_img_raw, folder="members/profile_images")
+            if m_id:
+                update_data["member_img"] = m_id
+                update_data["member_img_id"] = m_id
+                update_data["member_img_url"] = m_url
+
+        if aadhaar_img_raw:
+            a_id, a_url = process_cloudinary_image(aadhaar_img_raw, folder="members/aadhaar_cards")
+            if a_id:
+                update_data["aadhaar_card_img"] = a_id
+                update_data["aadhaar_card_img_id"] = a_id
+                update_data["aadhaar_card_img_url"] = a_url
+
         update_data["updated_at"] = get_ist_now()
 
         new_pg_type = update_data.get("pg_type")
@@ -674,6 +802,12 @@ class MemberView(APIView):
                 http_session.patch(bed_url, json={"is_occupied": False, "member_id": None})
             except:
                 pass # Silently ignore bed update failure for now
+        elif pg_type in ['Apartment', 'Flat'] and pg_id and room_id:
+            room_url = f"{DATABASE_URL}/pg_properties/{pg_id}/rooms/{room_id}.json"
+            try:
+                http_session.patch(room_url, json={"is_occupied": False, "member_id": None})
+            except:
+                pass
 
         # 3. Delete rent record
         rent_record_url = f"{DATABASE_URL}/rent_records/{member_id}.json"
@@ -682,14 +816,9 @@ class MemberView(APIView):
         except:
             pass
 
-        # 4. Soft Delete member
+        # 4. Hard Delete member
         try:
-            patch_data = {
-                "is_deleted": True,
-                "status": "Deleted",
-                "updated_at": get_ist_now()
-            }
-            delete_res = http_session.patch(member_url, json=patch_data)
+            delete_res = http_session.delete(member_url)
             delete_res.raise_for_status()
         except requests.exceptions.RequestException as e:
             return Response(
