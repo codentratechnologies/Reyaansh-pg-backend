@@ -422,6 +422,7 @@ class MemberView(APIView):
             "pg_type": pg_type,
             "pg_id": pg_id,
             "room_id": room_id,
+            "bed_id": bed_id,
             
             # Rent Details
             "monthly_rent": int(data.get("monthly_rent")),
@@ -523,6 +524,19 @@ class MemberView(APIView):
                 # A manual rollback or retry logic might be needed in a robust system.
                 return Response(
                     {"detail": f"Member created, but failed to update bed status: {str(e)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+        elif pg_type in ['Apartment', 'Flat'] and pg_id and room_id:
+            room_url = f"{DATABASE_URL}/pg_properties/{pg_id}/rooms/{room_id}.json"
+            try:
+                room_patch = {
+                    "is_occupied": True,
+                    "member_id": member_id
+                }
+                http_session.patch(room_url, json=room_patch)
+            except requests.exceptions.RequestException as e:
+                return Response(
+                    {"detail": f"Member created, but failed to update room status: {str(e)}"},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
 
@@ -788,6 +802,12 @@ class MemberView(APIView):
                 http_session.patch(bed_url, json={"is_occupied": False, "member_id": None})
             except:
                 pass # Silently ignore bed update failure for now
+        elif pg_type in ['Apartment', 'Flat'] and pg_id and room_id:
+            room_url = f"{DATABASE_URL}/pg_properties/{pg_id}/rooms/{room_id}.json"
+            try:
+                http_session.patch(room_url, json={"is_occupied": False, "member_id": None})
+            except:
+                pass
 
         # 3. Delete rent record
         rent_record_url = f"{DATABASE_URL}/rent_records/{member_id}.json"
@@ -796,14 +816,9 @@ class MemberView(APIView):
         except:
             pass
 
-        # 4. Soft Delete member
+        # 4. Hard Delete member
         try:
-            patch_data = {
-                "is_deleted": True,
-                "status": "Deleted",
-                "updated_at": get_ist_now()
-            }
-            delete_res = http_session.patch(member_url, json=patch_data)
+            delete_res = http_session.delete(member_url)
             delete_res.raise_for_status()
         except requests.exceptions.RequestException as e:
             return Response(
