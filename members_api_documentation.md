@@ -192,6 +192,8 @@ Registers a new member in Firebase, generates a sequential ID (`MEM001`, `MEM002
   | `gender` | String | Yes | Gender (`Male`, `Female`, `Other`) |
   | `company_college_name` | String | Yes | Company or college name |
   | `aadhaar_number` | String | Yes | 12-digit Aadhaar number |
+  | `member_img` | File / Base64 / String | Yes | Member profile image (uploaded to Cloudinary; Cloudinary ID saved in Firebase) |
+  | `aadhaar_card_img` | File / Base64 / String | Yes | Aadhaar card image (uploaded to Cloudinary; Cloudinary ID saved in Firebase) |
   | `emergency_contact_name` | String | Yes | Emergency contact full name |
   | `emergency_contact_relationship` | String | Yes | Relationship (e.g. `Father`, `Mother`, `Spouse`) |
   | `emergency_contact_number` | String | Yes | Emergency contact mobile number |
@@ -212,7 +214,8 @@ Registers a new member in Firebase, generates a sequential ID (`MEM001`, `MEM002
   | `status` | String | Yes | Member status (`Active`, `Notice Period`, `Inactive`) |
   | `status_reason` | String | **Conditional** | Required if `status` is `Notice Period` |
   | `alternate_mobile_number` | String | No | Secondary contact number |
-  | `email` | String | No | Email address |
+  | `email` | String | No | Email address (triggers welcome email ONLY to this member if provided) |
+  | `send_email` (or `send_welcome_email`) | Boolean | No | Set to `false` to skip auto-sending the welcome email (default: `true`) |
   | `pan_number` | String | No | PAN card number |
   | `driving_licence_number` | String | No | Driving license number |
   | `address_line_2` | String | No | Permanent address line 2 |
