@@ -251,7 +251,13 @@ class MemberView(APIView):
                     "rent_status": rent_status,
                     "member_status": m_status,
                     "gender": m_gender,
-                    "joining_date": m_joining_date
+                    "joining_date": m_joining_date,
+                    "member_img": m_data.get("member_img", ""),
+                    "member_img_id": m_data.get("member_img_id", ""),
+                    "member_img_url": m_data.get("member_img_url", ""),
+                    "aadhaar_card_img": m_data.get("aadhaar_card_img", ""),
+                    "aadhaar_card_img_id": m_data.get("aadhaar_card_img_id", ""),
+                    "aadhaar_card_img_url": m_data.get("aadhaar_card_img_url", "")
                 })
 
             formatted_members.reverse()
@@ -317,7 +323,6 @@ class MemberView(APIView):
         # 1. Validate Required Fields
         required_fields = [
             "full_name", "mobile_number", "occupation", "dob", "gender", "company_college_name",
-            "aadhaar_number",
             "emergency_contact_name", "emergency_contact_relationship", "emergency_contact_number",
             "address_line_1", "country", "state", "city", "pincode",
             "pg_type", "pg_id", "room_id",
@@ -329,8 +334,6 @@ class MemberView(APIView):
         
         if not member_img_raw:
             missing_fields.append("member_img")
-        if not aadhaar_img_raw:
-            missing_fields.append("aadhaar_card_img")
 
         pg_type = str(data.get("pg_type", ""))
         status_val = str(data.get("status", ""))
@@ -356,12 +359,14 @@ class MemberView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        aadhaar_img_id, aadhaar_img_url = process_cloudinary_image(aadhaar_img_raw, folder="members/aadhaar_cards")
-        if not aadhaar_img_id:
-            return Response(
-                {"detail": "Failed to upload aadhaar_card_img to Cloudinary. Please provide a valid image file, base64 string, or Cloudinary ID."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        aadhaar_img_id, aadhaar_img_url = "", ""
+        if aadhaar_img_raw:
+            aadhaar_img_id, aadhaar_img_url = process_cloudinary_image(aadhaar_img_raw, folder="members/aadhaar_cards")
+            if not aadhaar_img_id:
+                return Response(
+                    {"detail": "Failed to upload aadhaar_card_img to Cloudinary. Please provide a valid image file, base64 string, or Cloudinary ID."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
         pg_id = str(data.get("pg_id"))
         room_id = str(data.get("room_id"))
@@ -398,7 +403,7 @@ class MemberView(APIView):
             "company_college_name": str(data.get("company_college_name")),
             
             # Identity Verification & Images (Stored in Cloudinary, Cloudinary ID stored in Firebase)
-            "aadhaar_number": str(data.get("aadhaar_number")),
+            "aadhaar_number": str(data.get("aadhaar_number")) if data.get("aadhaar_number") else "",
             "member_img": member_img_id,
             "member_img_id": member_img_id,
             "member_img_url": member_img_url,

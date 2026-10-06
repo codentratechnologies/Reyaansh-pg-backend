@@ -611,3 +611,244 @@ class GetCitiesView(APIView):
                 {"detail": f"Failed to fetch from Firebase: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+class AddExpenseView(APIView):
+    """
+    POST and GET APIs for Expenses in Firebase Realtime Database.
+    Node Name: expenses
+    """
+    authentication_classes = [JWTAuthentication]
+
+    def post(self, request):
+        data = request.data
+
+        expense_name = data.get("expense_name") or data.get("name")
+        amount = data.get("amount")
+
+        if not expense_name or amount is None:
+            return Response(
+                {"detail": "expense_name and amount are required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not DATABASE_URL:
+            return Response(
+                {"detail": "Firebase database URL is not configured."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        try:
+            amount = float(amount)
+        except ValueError:
+            return Response(
+                {"detail": "amount must be a valid number."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            get_url = f'{DATABASE_URL}/expenses.json?orderBy="$key"&limitToLast=1'
+            response = http_session.get(get_url)
+            response.raise_for_status()
+            last_expense = response.json()
+            
+            next_num = 1
+            if last_expense and isinstance(last_expense, dict):
+                for key in last_expense.keys():
+                    if key.startswith("EXP"):
+                        try:
+                            next_num = int(key[3:]) + 1
+                        except ValueError:
+                            pass
+                            
+            expense_id = f"EXP{next_num:03d}"
+        except requests.exceptions.RequestException as e:
+            return Response(
+                {"detail": f"Failed to fetch from Firebase: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        payload = {
+            "expense_id": expense_id,
+            "expense_name": str(expense_name),
+            "amount": amount,
+            "created_at": get_ist_now(),
+        }
+
+        # Handle optional fields
+        if "pg_name" in data:
+            payload["pg_name"] = str(data.get("pg_name"))
+        if "description" in data:
+            payload["description"] = str(data.get("description"))
+        if "expense_date" in data:
+            payload["expense_date"] = str(data.get("expense_date"))
+
+        url = f"{DATABASE_URL}/expenses/{expense_id}.json"
+        
+        try:
+            response = http_session.put(url, json=payload)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            return Response(
+                {"detail": f"Failed to save expense to Firebase: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        return Response({
+            "message": "Expense added successfully",
+            "expense_id": expense_id,
+            "data": payload
+        }, status=status.HTTP_201_CREATED)
+
+    def get(self, request):
+        if not DATABASE_URL:
+            return Response(
+                {"detail": "Firebase database URL is not configured."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+            
+        expense_id = request.GET.get("expense_id") or request.headers.get("expense_id")
+        
+        if expense_id:
+            url = f"{DATABASE_URL}/expenses/{expense_id}.json"
+            try:
+                response = http_session.get(url)
+                response.raise_for_status()
+                data = response.json()
+                
+                if not data:
+                    return Response({"detail": "Expense not found."}, status=status.HTTP_404_NOT_FOUND)
+                
+                return Response(data, status=status.HTTP_200_OK)
+            except requests.exceptions.RequestException as e:
+                return Response(
+                    {"detail": f"Failed to fetch from Firebase: {str(e)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+                
+        # Get all expenses with native Firebase filtering if pg_name is present
+        pg_name_filter = request.GET.get("pg_name") or request.headers.get("pg_name")
+        
+        if pg_name_filter:
+            url = f'{DATABASE_URL}/expenses.json?orderBy="pg_name"&equalTo="{pg_name_filter}"'
+        else:
+            url = f"{DATABASE_URL}/expenses.json"
+
+        try:
+            response = http_session.get(url)
+            response.raise_for_status()
+            data = response.json()
+            
+            if not data:
+                return Response([], status=status.HTTP_200_OK)
+                
+            formatted_data = []
+            
+            for key, exp in data.items():
+                if isinstance(exp, dict):
+                    formatted_data.append(exp)
+                    
+            # Sort by created_at descending
+            formatted_data.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+                    
+            return Response(formatted_data, status=status.HTTP_200_OK)
+            
+        except requests.exceptions.RequestException as e:
+            return Response(
+                {"detail": f"Failed to fetch from Firebase: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def put(self, request):
+        data = request.data
+        expense_id = data.get('expense_id')
+
+        if not expense_id:
+            return Response(
+                {'detail': 'expense_id is required for updating.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not DATABASE_URL:
+            return Response(
+                {'detail': 'Firebase database URL is not configured.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        payload = {}
+        if 'expense_name' in data or 'name' in data:
+            payload['expense_name'] = str(data.get('expense_name') or data.get('name'))
+        if 'amount' in data:
+            try:
+                payload['amount'] = float(data.get('amount'))
+            except ValueError:
+                return Response(
+                    {'detail': 'amount must be a valid number.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        if 'pg_name' in data:
+            payload['pg_name'] = str(data.get('pg_name'))
+        if 'description' in data:
+            payload['description'] = str(data.get('description'))
+        if 'expense_date' in data:
+            payload['expense_date'] = str(data.get('expense_date'))
+
+        if not payload:
+            return Response(
+                {'detail': 'No valid fields provided for update.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        payload['updated_at'] = get_ist_now()
+
+        url = f'{DATABASE_URL}/expenses/{expense_id}.json'
+        
+        try:
+            check_res = http_session.get(url)
+            check_res.raise_for_status()
+            if not check_res.json():
+                return Response({'detail': 'Expense not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+            response = http_session.patch(url, json=payload)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            return Response(
+                {'detail': f'Failed to update expense in Firebase: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        return Response({
+            'message': 'Expense updated successfully',
+            'expense_id': expense_id,
+            'updated_data': payload
+        }, status=status.HTTP_200_OK)
+
+    def delete(self, request):
+        if not DATABASE_URL:
+            return Response(
+                {'detail': 'Firebase database URL is not configured.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        expense_id = request.data.get('expense_id') or request.GET.get('expense_id') or request.headers.get('expense_id')
+        if not expense_id:
+            return Response({'detail': 'expense_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        url = f'{DATABASE_URL}/expenses/{expense_id}.json'
+        
+        try:
+            check_response = http_session.get(url)
+            check_response.raise_for_status()
+            if not check_response.json():
+                return Response({'detail': 'Expense not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+            response = http_session.delete(url)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            return Response(
+                {'detail': f'Failed to delete from Firebase: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        return Response({'message': f'Expense {expense_id} deleted successfully'}, status=status.HTTP_200_OK)
+
