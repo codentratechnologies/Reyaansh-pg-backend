@@ -337,6 +337,7 @@ def parse_date(date_str):
     return None
 
 def extract_dashboard_filters(request):
+    f_pg_id = request.query_params.get("pg_id") or request.headers.get("pg_id")
     f_property_type = request.query_params.get("property_type") or request.query_params.get("pg_type") or request.headers.get("property_type")
     f_living_type = request.query_params.get("living_type") or request.headers.get("living_type")
     f_member_status = request.query_params.get("member_status") or request.query_params.get("status") or request.headers.get("member_status")
@@ -416,6 +417,7 @@ def extract_dashboard_filters(request):
     year_num = int(f_year) if f_year and str(f_year).isdigit() else None
 
     return {
+        "pg_id": f_pg_id,
         "property_type": f_property_type,
         "living_type": f_living_type,
         "member_status": f_member_status,
@@ -477,6 +479,11 @@ class DashboardKPIView(APIView):
             for pg_id, pg_info in pgs_data.items():
                 if not isinstance(pg_info, dict):
                     continue
+                # Skip inactive PGs fully
+                if not (pg_info.get("property_status") is True or str(pg_info.get("property_status")).lower() in ["true", "active"]):
+                    continue
+                if filters.get("pg_id") and pg_id != filters["pg_id"]:
+                    continue
                 pg_type = pg_info.get("pg_type", "")
                 living_type = pg_info.get("living_type", "")
                 if filters["property_type"] and pg_type.lower() != filters["property_type"].lower():
@@ -516,8 +523,12 @@ class DashboardKPIView(APIView):
             for m_id, m_info in members_data.items():
                 if not isinstance(m_info, dict) or m_info.get("is_deleted"):
                     continue
+                if m_info.get("status") in ["Inactive", "Deleted"]:
+                    continue
 
                 pg_id = m_info.get("pg_id", "")
+                if filters.get("pg_id") and pg_id != filters["pg_id"]:
+                    continue
                 pg_info = pgs_data.get(pg_id, {})
                 if filters["property_type"] and pg_info.get("pg_type", "").lower() != filters["property_type"].lower():
                     continue
@@ -555,6 +566,8 @@ class DashboardKPIView(APIView):
                     continue
 
                 pg_id = r_info.get("pg_id") or m_info.get("pg_id", "")
+                if filters.get("pg_id") and pg_id != filters["pg_id"]:
+                    continue
                 pg_info = pgs_data.get(pg_id, {})
                 if filters["property_type"] and pg_info.get("pg_type", "").lower() != filters["property_type"].lower():
                     continue
@@ -646,6 +659,11 @@ class DashboardChartsView(APIView):
             for pg_id, pg_info in pgs_data.items():
                 if not isinstance(pg_info, dict):
                     continue
+                # Skip inactive PGs fully
+                if not (pg_info.get("property_status") is True or str(pg_info.get("property_status")).lower() in ["true", "active"]):
+                    continue
+                if filters.get("pg_id") and pg_id != filters["pg_id"]:
+                    continue
                 pg_type = pg_info.get("pg_type", "")
                 living_type = pg_info.get("living_type", "")
                 if filters["property_type"] and pg_type.lower() != filters["property_type"].lower():
@@ -695,10 +713,14 @@ class DashboardChartsView(APIView):
             monthly_trend_map = {}
 
             for m_id, m_info in members_data.items():
-                if not isinstance(m_info, dict):
+                if not isinstance(m_info, dict) or m_info.get("is_deleted"):
+                    continue
+                if m_info.get("status") in ["Inactive", "Deleted"]:
                     continue
 
                 pg_id = m_info.get("pg_id", "")
+                if filters.get("pg_id") and pg_id != filters["pg_id"]:
+                    continue
                 pg_info = pgs_data.get(pg_id, {})
                 if filters["property_type"] and pg_info.get("pg_type", "").lower() != filters["property_type"].lower():
                     continue
@@ -837,6 +859,8 @@ class DashboardTablesView(APIView):
                     continue
 
                 pg_id = r_info.get("pg_id", m_info.get("pg_id", ""))
+                if filters.get("pg_id") and pg_id != filters["pg_id"]:
+                    continue
                 pg_info = pg_map.get(pg_id, {})
                 if filters["property_type"] and pg_info.get("pg_type", "").lower() != filters["property_type"].lower():
                     continue
@@ -919,6 +943,8 @@ class DashboardTablesView(APIView):
                     if filters["member_status"] and m_info.get("status", "").lower() != filters["member_status"].lower():
                         continue
                     pg_id = p_info.get("pg_id", m_info.get("pg_id", ""))
+                    if filters.get("pg_id") and pg_id != filters["pg_id"]:
+                        continue
                     pg_info = pg_map.get(pg_id, {})
                     if filters["property_type"] and pg_info.get("pg_type", "").lower() != filters["property_type"].lower():
                         continue
@@ -1011,6 +1037,8 @@ class DashboardAlertsView(APIView):
                     continue
 
                 pg_id = r_info.get("pg_id", m_info.get("pg_id", ""))
+                if filters.get("pg_id") and pg_id != filters["pg_id"]:
+                    continue
                 pg_info = pg_map.get(pg_id, {})
                 if filters["property_type"] and pg_info.get("pg_type", "").lower() != filters["property_type"].lower():
                     continue
