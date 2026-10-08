@@ -5,5 +5,5 @@ urlpatterns = [
     path('addpg/', AddPgPropertyView.as_view(), name='add_pg_property'),
     path('states/', GetStatesView.as_view(), name='get_states'),
     path('cities/', GetCitiesView.as_view(), name='get_cities'),
-    path('add_expense/', AddExpenseView.as_view(), name='add_expense'),
+    path('pg/add_expense/', AddExpenseView.as_view(), name='add_expense'),
 ]
